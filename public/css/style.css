@@ -334,6 +334,79 @@ img {
   margin: 0 auto 2.2rem;
 }
 
+/* ---------------------------------------------------
+   Contact page (Yhteystiedot)
+--------------------------------------------------- */
+
+.contact .about-inner {
+  margin: 0 auto 2rem;
+}
+
+.contact-grid {
+  list-style: none;
+  margin: 1rem auto 0;
+  padding: 0;
+  max-width: 900px;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1.2rem;
+}
+
+.contact-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.35rem;
+  height: 100%;
+  padding: 2.2rem 1.4rem;
+  text-align: center;
+  background: rgba(255, 255, 255, 0.55);
+  border: 1px solid rgba(43, 42, 37, 0.08);
+  border-radius: 3px;
+  transition: border-color 0.2s ease, background-color 0.2s ease, transform 0.2s ease;
+}
+
+.contact-card:hover,
+.contact-card:focus-visible {
+  border-color: var(--color-lilac);
+  background: var(--color-white);
+  transform: translateY(-2px);
+  outline: none;
+}
+
+.contact-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 52px;
+  height: 52px;
+  margin-bottom: 0.8rem;
+  border-radius: 50%;
+  background: linear-gradient(135deg, var(--color-sage-light), var(--color-lilac-light));
+  color: var(--color-lilac-dark);
+  font-size: 1.35rem;
+}
+
+.contact-label {
+  font-size: 0.72rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--color-lilac-dark);
+}
+
+.contact-value {
+  font-family: var(--font-heading);
+  font-size: 1.1rem;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 768px) {
+  .contact-grid {
+    grid-template-columns: 1fr;
+    max-width: 420px;
+  }
+}
+
 .nav-links a[aria-current="page"] {
   opacity: 0.65;
 }
