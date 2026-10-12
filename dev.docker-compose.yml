@@ -1,0 +1,22 @@
+# Run with:  docker compose -f dev.docker-compose.yml up --build
+# Then open http://localhost:8080  (Docker Desktop on Windows, WSL2 backend).
+# Re-run `docker compose -f dev.docker-compose.yml restart` to rebuild after edits.
+services:
+  httpd:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    init: true
+    ports:
+      - "8080:8080"
+    volumes:
+      - .:/app
+      - build-cache:/build        # keep build output off the Windows bind mount
+    working_dir: /app
+    command: >
+      sh -c "cmake -S /app -B /build -DCMAKE_BUILD_TYPE=Release &&
+             cmake --build /build -j &&
+             exec /build/kasin-httpd -p 8080 -r /app/public"
+
+volumes:
+  build-cache:
