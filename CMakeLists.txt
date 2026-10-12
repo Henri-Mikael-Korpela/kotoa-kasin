@@ -17,7 +17,7 @@ set(KASIN_RESP_BUF_SIZE        32768 CACHE STRING "Response buffer bytes per con
 
 find_package(Threads REQUIRED)
 
-add_executable(kasin-httpd src/main.c)
+add_executable(kasin-httpd src/main.c src/arena.c src/str.c)
 target_compile_options(kasin-httpd PRIVATE -Wall -Wextra -Wpedantic)
 target_compile_definitions(kasin-httpd PRIVATE
   MAX_CONNS_PER_WORKER=${KASIN_MAX_CONNS_PER_WORKER}
