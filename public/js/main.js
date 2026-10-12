@@ -4,7 +4,8 @@ document.addEventListener('DOMContentLoaded', function () {
   var navLinks = document.getElementById('navLinks');
 
   function updateHeaderState() {
-    if (window.scrollY > 40) {
+    // Pages without a cover photo keep the solid header at all scroll positions.
+    if (window.scrollY > 40 || header.hasAttribute('data-solid')) {
       header.classList.add('is-scrolled');
     } else {
       header.classList.remove('is-scrolled');

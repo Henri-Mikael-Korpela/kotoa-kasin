@@ -282,6 +282,62 @@ img {
   background: var(--color-text);
 }
 
+.btn-outline-dark {
+  border-color: rgba(43, 42, 37, 0.3);
+  color: var(--color-text);
+  background: transparent;
+}
+
+.btn-outline-dark:hover {
+  background: rgba(43, 42, 37, 0.05);
+}
+
+/* ---------------------------------------------------
+   About page (Meistä)
+--------------------------------------------------- */
+
+.about {
+  min-height: calc(100vh - 220px);
+  padding: calc(var(--header-height) + 90px) 0 110px;
+}
+
+.about-inner {
+  max-width: 640px;
+  text-align: center;
+}
+
+.about-portrait {
+  width: 112px;
+  height: 112px;
+  margin: 0 auto 2rem;
+  border-radius: 50%;
+  object-fit: cover;
+  box-shadow: 0 0 0 6px var(--color-bg), 0 0 0 7px var(--color-lilac);
+}
+
+.about-eyebrow {
+  font-size: 0.72rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--color-lilac-dark);
+  margin-bottom: 0.6em;
+}
+
+.about-inner h1 {
+  font-size: clamp(2.2rem, 5vw, 3rem);
+}
+
+.about-text {
+  font-size: 1.2rem;
+  line-height: 1.7;
+  color: var(--color-text);
+  margin: 0 auto 2.2rem;
+}
+
+.nav-links a[aria-current="page"] {
+  opacity: 0.65;
+}
+
 /* ---------------------------------------------------
    Intro
 --------------------------------------------------- */
