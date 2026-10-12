@@ -1,5 +1,216 @@
-<!doctype html>
-<meta charset="utf-8">
-<title>kasin-httpd</title>
-<h1>Hello from kasin-httpd</h1>
-<p>Served from a fixed-size, pre-reserved memory arena. No malloc involved.</p>
+<!DOCTYPE html>
+<html lang="fi">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Kotoa käsin &mdash; kotitekoista kosmetiikkaa ja ruokaa</title>
+  <meta name="description"
+    content="Kotoa käsin &ndash; käsintehtyjä luonnonkosmetiikan reseptejä ja kotiruokaa yrteistä ja marjoista.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link
+    href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=Work+Sans:wght@300;400;500;600&display=swap"
+    rel="stylesheet">
+  <link rel="stylesheet" href="css/style.css">
+</head>
+
+<body>
+
+  <header class="site-header" id="siteHeader">
+    <div class="nav-container">
+      <a href="#top" class="logo">Kotoa käsin</a>
+
+      <nav class="nav-links" id="navLinks">
+        <a href="#top">Etusivu</a>
+        <a href="#kauppa">Kauppa</a>
+        <a href="#reseptit">Reseptit</a>
+        <a href="#meista">Meistä</a>
+        <a href="#yhteystiedot">Yhteystiedot</a>
+      </nav>
+
+      <button class="menu-toggle" id="menuToggle" aria-label="Avaa valikko" aria-expanded="false"
+        aria-controls="navLinks">
+        <span></span>
+        <span></span>
+        <span></span>
+      </button>
+    </div>
+  </header>
+
+  <main>
+
+    <section class="hero" id="top">
+      <div class="hero-media">
+        <img src="assets/cover.png" alt="Syreenipensas kukassa" class="hero-image">
+        <div class="hero-overlay"></div>
+      </div>
+      <div class="hero-content">
+        <h1 class="hero-title">Kotoa käsin</h1>
+        <p class="hero-subtitle">Kotitekoista kosmetiikkaa ja ruokaa luonnon rytmissä</p>
+        <a href="#reseptit" class="btn btn-outline">Tutustu resepteihin</a>
+      </div>
+      <a href="#reseptit" class="scroll-cue" aria-label="Vieritä alas">&darr;</a>
+    </section>
+
+    <section class="intro">
+      <div class="container intro-inner">
+        <h2>Tervetuloa</h2>
+        <p>
+          Kotoa käsin on kokoelma käsintehtyjä reseptejä &ndash; saippuoita, voiteita
+          ja muita luonnonkosmetiikan pieniä ihmeitä sekä kotiruokaa, joka syntyy
+          puutarhan ja lähimetsän antimista. Jokainen resepti on testattu omassa
+          keittiössä ja tehty jaettavaksi.
+        </p>
+      </div>
+    </section>
+
+    <section class="recipes" id="reseptit">
+      <div class="container">
+        <div class="section-heading">
+          <h2>Reseptejä ja tekemisen iloa</h2>
+          <p>Valikoima suosikkeja kosmetiikan ja ruoan maailmasta</p>
+        </div>
+
+        <div class="recipe-grid">
+
+          <article class="recipe-card" data-category="kosmetiikka">
+            <a href="#" class="recipe-thumb" data-emoji="&#127804;">
+              <img src="assets/recipes/laventelisaippua.jpg" alt="Laventelisaippua" loading="lazy"
+                onerror="this.remove()">
+            </a>
+            <div class="recipe-info">
+              <span class="recipe-tag">Kosmetiikka</span>
+              <h3><a href="#">Laventelisaippua</a></h3>
+              <p>Rauhoittava käsintehty saippua kuivalle iholle.</p>
+            </div>
+          </article>
+
+          <article class="recipe-card" data-category="kosmetiikka">
+            <a href="#" class="recipe-thumb" data-emoji="&#127807;">
+              <img src="assets/recipes/yrttivoide.jpg" alt="Yrttivoide" loading="lazy" onerror="this.remove()">
+            </a>
+            <div class="recipe-info">
+              <span class="recipe-tag">Kosmetiikka</span>
+              <h3><a href="#">Yrttivoide kuivalle iholle</a></h3>
+              <p>Puutarhan yrteistä uutettu, hoitava perusvoide.</p>
+            </div>
+          </article>
+
+          <article class="recipe-card" data-category="ruoka">
+            <a href="#" class="recipe-thumb" data-emoji="&#129744;">
+              <img src="assets/recipes/marjahillo.jpg" alt="Kotitekoinen marjahillo" loading="lazy"
+                onerror="this.remove()">
+            </a>
+            <div class="recipe-info">
+              <span class="recipe-tag">Ruoka</span>
+              <h3><a href="#">Kotitekoinen marjahillo</a></h3>
+              <p>Kesän marjasadosta keitetty, vähäsokerinen hillo.</p>
+            </div>
+          </article>
+
+          <article class="recipe-card" data-category="kosmetiikka">
+            <a href="#" class="recipe-thumb" data-emoji="&#127801;">
+              <img src="assets/recipes/ruusuvesitoner.jpg" alt="Ruusuvesitoner" loading="lazy" onerror="this.remove()">
+            </a>
+            <div class="recipe-info">
+              <span class="recipe-tag">Kosmetiikka</span>
+              <h3><a href="#">Ruusuvesitoner</a></h3>
+              <p>Virkistävä kasvovesi tuoreista ruusunlehdistä.</p>
+            </div>
+          </article>
+
+          <article class="recipe-card" data-category="ruoka">
+            <a href="#" class="recipe-thumb" data-emoji="&#127838;">
+              <img src="assets/recipes/hapanjuurileipa.jpg" alt="Hapanjuurileipä" loading="lazy"
+                onerror="this.remove()">
+            </a>
+            <div class="recipe-info">
+              <span class="recipe-tag">Ruoka</span>
+              <h3><a href="#">Hapanjuurileipä</a></h3>
+              <p>Rapeakuorinen leipä omalla juuritaikinalla.</p>
+            </div>
+          </article>
+
+          <article class="recipe-card" data-category="kosmetiikka">
+            <a href="#" class="recipe-thumb" data-emoji="&#127804;">
+              <img src="assets/recipes/kalendulavoide.jpg" alt="Kalendulavoide" loading="lazy" onerror="this.remove()">
+            </a>
+            <div class="recipe-info">
+              <span class="recipe-tag">Kosmetiikka</span>
+              <h3><a href="#">Kalendulavoide</a></h3>
+              <p>Ärsytystä lievittävä voide kehäkukan uutteesta.</p>
+            </div>
+          </article>
+
+          <article class="recipe-card" data-category="ruoka">
+            <a href="#" class="recipe-thumb" data-emoji="&#127823;">
+              <img src="assets/recipes/omenahillo.jpg" alt="Omena-kanelihillo" loading="lazy" onerror="this.remove()">
+            </a>
+            <div class="recipe-info">
+              <span class="recipe-tag">Ruoka</span>
+              <h3><a href="#">Omena-kanelihillo</a></h3>
+              <p>Syksyn omenista, kanelista ja tähtianiksesta.</p>
+            </div>
+          </article>
+
+          <article class="recipe-card" data-category="ruoka">
+            <a href="#" class="recipe-thumb" data-emoji="&#129384;">
+              <img src="assets/recipes/yrttisuola.jpg" alt="Yrttisuola" loading="lazy" onerror="this.remove()">
+            </a>
+            <div class="recipe-info">
+              <span class="recipe-tag">Ruoka</span>
+              <h3><a href="#">Yrttisuola</a></h3>
+              <p>Kuivatuista yrteistä sekoitettu mauste-suola.</p>
+            </div>
+          </article>
+
+        </div>
+      </div>
+    </section>
+
+    <section class="cta">
+      <div class="container cta-inner">
+        <h2>Uusi resepti joka kuulle</h2>
+        <p>Liity postituslistalle ja saat tuoreimmat reseptit suoraan sähköpostiisi.</p>
+        <form class="newsletter-form" action="#" method="post">
+          <input type="email" name="email" placeholder="Sähköpostiosoitteesi" required aria-label="Sähköpostiosoite">
+          <button type="submit" class="btn btn-primary">Liity mukaan</button>
+        </form>
+      </div>
+    </section>
+
+  </main>
+
+  <footer class="site-footer" id="yhteystiedot">
+    <div class="container footer-inner">
+      <div class="footer-col">
+        <p class="logo footer-logo">Kotoa käsin</p>
+        <p>Kotitekoista kosmetiikkaa ja ruokaa luonnon rytmissä.</p>
+      </div>
+      <div class="footer-col">
+        <h4>Sivukartta</h4>
+        <a href="#top">Etusivu</a>
+        <a href="#reseptit">Reseptit</a>
+        <a href="#meista">Meistä</a>
+      </div>
+      <div class="footer-col" id="meista">
+        <h4>Meistä</h4>
+        <a href="#">Tarinamme</a>
+        <a href="#">Usein kysytyt kysymykset</a>
+      </div>
+      <div class="footer-col">
+        <h4>Ota yhteyttä</h4>
+        <a href="mailto:hannakkorpela@gmail.com">hannakkorpela@gmail.com</a>
+        <a href="https://www.facebook.com/profile.php?id=61591586081686" target="_blank"
+          rel="noopener noreferrer">Facebook</a>
+        <a href="https://www.instagram.com/kotoa.kasin" target="_blank" rel="noopener noreferrer">Instagram</a>
+      </div>
+    </div>
+    <p class="footer-copy">&copy; <span id="year"></span> Kotoa käsin. Kaikki oikeudet pidätetään.</p>
+  </footer>
+
+  <script src="js/main.js"></script>
+</body>
+
+</html>

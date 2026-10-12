@@ -18,7 +18,8 @@
  *    pipelining, idle timeouts. Serves GET/HEAD for static files plus /health.
  *
  * Limits (all compile-time, see CMakeLists.txt): request headers must fit in
- * REQ_BUF_SIZE; a served file must fit in RESP_BUF_SIZE - HDR_RESERVE.
+ * REQ_BUF_SIZE. File bodies of any size are streamed with sendfile(), so only
+ * headers and small built-in bodies use the response buffer.
  */
 
 #define _GNU_SOURCE
@@ -37,6 +38,7 @@
 #include <string.h>
 #include <sys/epoll.h>
 #include <sys/mman.h>
+#include <sys/sendfile.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sysexits.h>
@@ -63,10 +65,9 @@
 #define ACCEPT_BURST      64
 #define LISTEN_BACKLOG    1024
 #define IDLE_TIMEOUT_SEC  15
-#define HDR_RESERVE       512  // Space in front of a file body for its header.
 #define MAX_PATH_LEN      1024
 
-static_assert (RESP_BUF_SIZE >= 4 * HDR_RESERVE, "RESP_BUF_SIZE too small");
+static_assert (RESP_BUF_SIZE >= 1024, "RESP_BUF_SIZE too small");
 static_assert (REQ_BUF_SIZE >= 512, "REQ_BUF_SIZE too small");
 
 #define CACHE_LINE 64
@@ -86,6 +87,9 @@ typedef struct Conn {
     uint32_t      req_len;  /**< Bytes buffered in req. */
     uint32_t      resp_pos;  /**< Next byte of resp to send. */
     uint32_t      resp_end;  /**< One past last byte of resp. */
+    int           file_fd;  /**< File streamed after resp, or -1. */
+    off_t         file_pos;  /**< Next byte of file_fd to send. */
+    off_t         file_end;  /**< One past last byte of file_fd to send. */
     int64_t       last_active;  /**< Monotonic seconds. */
     struct Conn  *next_free;
     uint8_t      *req;  /**< REQ_BUF_SIZE bytes, lives in the arena. */
@@ -258,8 +262,8 @@ static Str const WELCOME = STR_INIT(
     "<h1>kasin-httpd is running</h1><p>Put files in the served directory.</p>\n");
 
 /**
- * Reads the file into resp at HDR_RESERVE, then writes the header right in front
- * of it so Content-Length is exact and the whole response is one contiguous span.
+ * Writes the response header into resp and keeps the file open so its body can
+ * be streamed with sendfile(), whatever its size.
  */
 static void serve_file(Conn *c, Str rel_path, bool head_only, bool is_root) {
     char rel_path_z[MAX_PATH_LEN];  // openat() needs a NUL-terminated path.
@@ -289,42 +293,24 @@ static void serve_file(Conn *c, Str rel_path, bool head_only, bool is_root) {
         respond_error(c, 404, head_only);
         return;
     }
-    if ((uint64_t)st.st_size > RESP_BUF_SIZE - HDR_RESERVE) {
-        close(fd);
-        respond_error(c, 500, head_only);  // Does not fit the fixed response buffer.
-        return;
-    }
-
-    size_t body_len = (size_t)st.st_size;
-    if (!head_only) {
-        size_t got = 0;
-        while (got < body_len) {
-            ssize_t r = pread(fd, c->resp + HDR_RESERVE + got, body_len - got, (off_t)got);
-            if (r > 0) {
-                got += (size_t)r;
-            } else if (r < 0 && errno == EINTR) {
-                continue;
-            } else {
-                break;
-            }
-        }
-        body_len = got;  // File may have shrunk underneath us.
-    }
-    close(fd);
-
-    char hdr_buf[HDR_RESERVE];
     Str_Builder hdr;
-    str_builder_init(&hdr, hdr_buf, sizeof hdr_buf);
-    write_head(&hdr, c, 200, STR("OK"), mime_for(rel_path),
-               head_only ? (uint64_t)st.st_size : body_len, STR(""));
+    str_builder_init(&hdr, (char *)c->resp, RESP_BUF_SIZE);
+    write_head(&hdr, c, 200, STR("OK"), mime_for(rel_path), (uint64_t)st.st_size, STR(""));
     if (hdr.overflow) {
+        close(fd);
         respond_error(c, 500, head_only);
         return;
     }
+    c->resp_pos = 0;
+    c->resp_end = (uint32_t)hdr.len;
 
-    c->resp_pos = HDR_RESERVE - (uint32_t)hdr.len;
-    memcpy(c->resp + c->resp_pos, hdr.data, hdr.len);
-    c->resp_end = HDR_RESERVE + (head_only ? 0 : (uint32_t)body_len);
+    if (head_only || st.st_size == 0) {
+        close(fd);
+        return;
+    }
+    c->file_fd = fd;  // Streamed by conn_advance() once the header is out.
+    c->file_pos = 0;
+    c->file_end = st.st_size;
 }
 
 // Request parsing / routing.
@@ -474,6 +460,10 @@ static void conn_want(Worker *w, Conn *c, uint32_t events) {
 }
 
 static void conn_close(Worker *w, Conn *c) {
+    if (c->file_fd >= 0) {
+        close(c->file_fd);
+        c->file_fd = -1;
+    }
     close(c->fd);  // Also removes it from the epoll set.
     c->fd = -1;
     c->next_free = w->free_list;
@@ -515,6 +505,29 @@ static void conn_advance(Worker *w, Conn *c) {
             }
             conn_close(w, c);
             return;
+        }
+
+        // Zero-copy body: the kernel moves file pages straight to the socket.
+        while (c->file_fd >= 0 && c->file_pos < c->file_end) {
+            ssize_t n = sendfile(c->fd, c->file_fd, &c->file_pos,
+                                 (size_t)(c->file_end - c->file_pos));
+            if (n > 0) {
+                continue;
+            }
+            if (n < 0 && errno == EINTR) {
+                continue;
+            }
+            if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+                conn_want(w, c, EPOLLOUT);
+                return;
+            }
+            // Error, or the file shrank: Content-Length can no longer be honored.
+            conn_close(w, c);
+            return;
+        }
+        if (c->file_fd >= 0) {
+            close(c->file_fd);
+            c->file_fd = -1;
         }
 
         if (!c->keepalive) {
@@ -571,6 +584,8 @@ static void accept_all(Worker *w, int64_t now) {
         c->state = ST_READING;
         c->keepalive = 0;
         c->req_len = c->resp_pos = c->resp_end = 0;
+        c->file_fd = -1;
+        c->file_pos = c->file_end = 0;
         c->last_active = now;
         c->events = EPOLLIN;
 

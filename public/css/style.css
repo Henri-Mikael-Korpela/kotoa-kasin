@@ -1,0 +1,557 @@
+/* ---------------------------------------------------
+   Kotoa käsin — base styles
+   Minimal, airy, Scandinavian-inspired layout
+--------------------------------------------------- */
+
+:root {
+  --color-bg: #fbf1d9;
+  --color-bg-alt: #f5e6bf;
+  --color-text: #2b2a25;
+  --color-text-muted: #6b6858;
+  --color-white: #ffffff;
+
+  --color-lilac: #9c8aa8;
+  --color-lilac-dark: #7c6a8c;
+  --color-lilac-light: #ede7f0;
+
+  --color-sage: #8b9a73;
+  --color-sage-light: #e4e8da;
+
+  --font-heading: 'Fraunces', Georgia, 'Times New Roman', serif;
+  --font-body: 'Work Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+
+  --header-height: 76px;
+  --container-width: 1180px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  margin: 0;
+  font-family: var(--font-body);
+  color: var(--color-text);
+  background: var(--color-bg);
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+}
+
+h1, h2, h3, h4 {
+  font-family: var(--font-heading);
+  font-weight: 500;
+  line-height: 1.2;
+  margin: 0 0 0.5em;
+}
+
+p {
+  margin: 0 0 1em;
+  color: var(--color-text-muted);
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+img {
+  max-width: 100%;
+  display: block;
+}
+
+.container {
+  width: 100%;
+  max-width: var(--container-width);
+  margin: 0 auto;
+  padding: 0 24px;
+}
+
+/* ---------------------------------------------------
+   Header / fixed navigation
+--------------------------------------------------- */
+
+.site-header {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: var(--header-height);
+  z-index: 1000;
+  background: transparent;
+  transition: background-color 0.35s ease, box-shadow 0.35s ease;
+}
+
+.site-header.is-scrolled {
+  background: rgba(251, 241, 217, 0.92);
+  backdrop-filter: saturate(180%) blur(10px);
+  box-shadow: 0 1px 0 rgba(43, 42, 37, 0.06);
+}
+
+.nav-container {
+  max-width: var(--container-width);
+  margin: 0 auto;
+  height: 100%;
+  padding: 0 24px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.logo {
+  font-family: var(--font-heading);
+  font-size: 1.4rem;
+  letter-spacing: 0.02em;
+  color: var(--color-white);
+  transition: color 0.35s ease;
+}
+
+.site-header.is-scrolled .logo {
+  color: var(--color-text);
+}
+
+.nav-links {
+  display: flex;
+  gap: 2.2rem;
+}
+
+.nav-links a {
+  font-size: 0.92rem;
+  letter-spacing: 0.02em;
+  color: var(--color-white);
+  transition: color 0.35s ease, opacity 0.2s ease;
+  position: relative;
+}
+
+.site-header.is-scrolled .nav-links a {
+  color: var(--color-text);
+}
+
+.nav-links a:hover {
+  opacity: 0.65;
+}
+
+.menu-toggle {
+  display: none;
+  flex-direction: column;
+  justify-content: center;
+  gap: 5px;
+  width: 32px;
+  height: 32px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 0;
+  z-index: 1001;
+}
+
+.menu-toggle span {
+  display: block;
+  height: 2px;
+  width: 100%;
+  background: var(--color-white);
+  transition: background-color 0.35s ease, transform 0.3s ease, opacity 0.3s ease;
+}
+
+.site-header.is-scrolled .menu-toggle span,
+.menu-toggle.is-open span {
+  background: var(--color-text);
+}
+
+.menu-toggle.is-open span:nth-child(1) {
+  transform: translateY(7px) rotate(45deg);
+}
+
+.menu-toggle.is-open span:nth-child(2) {
+  opacity: 0;
+}
+
+.menu-toggle.is-open span:nth-child(3) {
+  transform: translateY(-7px) rotate(-45deg);
+}
+
+/* ---------------------------------------------------
+   Hero / cover
+--------------------------------------------------- */
+
+.hero {
+  position: relative;
+  height: 100vh;
+  min-height: 560px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+.hero-media {
+  position: absolute;
+  inset: 0;
+}
+
+.hero-image {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: center;
+}
+
+.hero-overlay {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    180deg,
+    rgba(43, 42, 37, 0.35) 0%,
+    rgba(43, 42, 37, 0.25) 45%,
+    rgba(43, 42, 37, 0.55) 100%
+  );
+}
+
+.hero-content {
+  position: relative;
+  z-index: 2;
+  text-align: center;
+  color: var(--color-white);
+  padding: 0 24px;
+}
+
+.hero-title {
+  font-size: clamp(2.8rem, 8vw, 5.5rem);
+  letter-spacing: 0.01em;
+  margin-bottom: 0.3em;
+}
+
+.hero-subtitle {
+  font-size: clamp(1rem, 2vw, 1.25rem);
+  color: rgba(255, 255, 255, 0.9);
+  max-width: 32em;
+  margin: 0 auto 1.8em;
+}
+
+.scroll-cue {
+  position: absolute;
+  bottom: 28px;
+  left: 50%;
+  transform: translateX(-50%);
+  color: var(--color-white);
+  font-size: 1.4rem;
+  z-index: 2;
+  animation: bounce 2.2s infinite;
+}
+
+@keyframes bounce {
+  0%, 100% { transform: translate(-50%, 0); }
+  50% { transform: translate(-50%, 8px); }
+}
+
+/* ---------------------------------------------------
+   Buttons
+--------------------------------------------------- */
+
+.btn {
+  display: inline-block;
+  padding: 0.85em 2em;
+  font-size: 0.9rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  border-radius: 2px;
+  transition: all 0.25s ease;
+  cursor: pointer;
+  border: 1px solid transparent;
+}
+
+.btn-outline {
+  border-color: rgba(255, 255, 255, 0.8);
+  color: var(--color-white);
+  background: transparent;
+}
+
+.btn-outline:hover {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.btn-primary {
+  background: var(--color-lilac-dark);
+  color: var(--color-white);
+}
+
+.btn-primary:hover {
+  background: var(--color-text);
+}
+
+/* ---------------------------------------------------
+   Intro
+--------------------------------------------------- */
+
+.intro {
+  padding: 110px 0 80px;
+}
+
+.intro-inner {
+  max-width: 640px;
+  text-align: center;
+}
+
+.intro-inner h2 {
+  font-size: 2rem;
+}
+
+/* ---------------------------------------------------
+   Section heading
+--------------------------------------------------- */
+
+.section-heading {
+  text-align: center;
+  max-width: 560px;
+  margin: 0 auto 3.5rem;
+}
+
+.section-heading h2 {
+  font-size: 2.1rem;
+}
+
+/* ---------------------------------------------------
+   Recipe grid
+--------------------------------------------------- */
+
+.recipes {
+  padding: 40px 0 100px;
+}
+
+.recipe-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 2.4rem 1.8rem;
+}
+
+.recipe-card {
+  display: flex;
+  flex-direction: column;
+}
+
+.recipe-thumb {
+  position: relative;
+  display: block;
+  aspect-ratio: 4 / 5;
+  overflow: hidden;
+  background: linear-gradient(135deg, var(--color-sage-light), var(--color-lilac-light));
+  border-radius: 3px;
+  margin-bottom: 1.1rem;
+}
+
+.recipe-thumb::before {
+  content: attr(data-emoji);
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 2.6rem;
+  opacity: 0.55;
+}
+
+.recipe-thumb img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transition: transform 0.5s ease;
+}
+
+.recipe-card:hover .recipe-thumb img {
+  transform: scale(1.05);
+}
+
+.recipe-tag {
+  display: inline-block;
+  font-size: 0.72rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--color-lilac-dark);
+  margin-bottom: 0.5em;
+}
+
+.recipe-info h3 {
+  font-size: 1.15rem;
+  margin-bottom: 0.35em;
+}
+
+.recipe-info h3 a:hover {
+  color: var(--color-lilac-dark);
+}
+
+.recipe-info p {
+  font-size: 0.92rem;
+  margin: 0;
+}
+
+/* ---------------------------------------------------
+   Newsletter CTA
+--------------------------------------------------- */
+
+.cta {
+  background: var(--color-bg-alt);
+  padding: 90px 0;
+}
+
+.cta-inner {
+  max-width: 520px;
+  text-align: center;
+}
+
+.cta-inner h2 {
+  font-size: 1.9rem;
+}
+
+.newsletter-form {
+  display: flex;
+  gap: 0.75rem;
+  margin-top: 1.5rem;
+}
+
+.newsletter-form input {
+  flex: 1;
+  padding: 0.85em 1.1em;
+  border: 1px solid rgba(43, 42, 37, 0.2);
+  border-radius: 2px;
+  font-family: var(--font-body);
+  font-size: 0.95rem;
+  background: var(--color-bg);
+}
+
+.newsletter-form input:focus {
+  outline: none;
+  border-color: var(--color-lilac-dark);
+}
+
+/* ---------------------------------------------------
+   Footer
+--------------------------------------------------- */
+
+.site-footer {
+  background: var(--color-text);
+  color: rgba(255, 255, 255, 0.75);
+  padding: 70px 0 30px;
+}
+
+.footer-inner {
+  display: grid;
+  grid-template-columns: 1.4fr 1fr 1fr 1fr;
+  gap: 2.5rem;
+}
+
+.footer-logo {
+  color: var(--color-white);
+  font-size: 1.3rem;
+  margin-bottom: 0.6em;
+}
+
+.footer-col h4 {
+  color: var(--color-white);
+  font-family: var(--font-body);
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin-bottom: 1em;
+}
+
+.footer-col a {
+  display: block;
+  margin-bottom: 0.6em;
+  color: rgba(255, 255, 255, 0.75);
+  font-size: 0.92rem;
+}
+
+.footer-col a:hover {
+  color: var(--color-white);
+}
+
+.footer-copy {
+  text-align: center;
+  font-size: 0.8rem;
+  color: rgba(255, 255, 255, 0.45);
+  margin: 50px 0 0;
+}
+
+/* ---------------------------------------------------
+   Responsive
+--------------------------------------------------- */
+
+@media (max-width: 1024px) {
+  .recipe-grid {
+    grid-template-columns: repeat(3, 1fr);
+  }
+
+  .footer-inner {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+@media (max-width: 768px) {
+  :root {
+    --header-height: 64px;
+  }
+
+  .nav-links {
+    position: fixed;
+    top: var(--header-height);
+    left: 0;
+    width: 100%;
+    height: calc(100vh - var(--header-height));
+    background: var(--color-bg);
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 2rem;
+    transform: translateX(100%);
+    transition: transform 0.35s ease;
+  }
+
+  .nav-links.is-open {
+    transform: translateX(0);
+  }
+
+  .nav-links a {
+    color: var(--color-text);
+    font-size: 1.1rem;
+  }
+
+  .menu-toggle {
+    display: flex;
+  }
+
+  .recipe-grid {
+    grid-template-columns: repeat(2, 1fr);
+    gap: 2rem 1.2rem;
+  }
+
+  .newsletter-form {
+    flex-direction: column;
+  }
+
+  .footer-inner {
+    grid-template-columns: 1fr;
+    gap: 2rem;
+    text-align: center;
+  }
+}
+
+@media (max-width: 480px) {
+  .recipe-grid {
+    grid-template-columns: 1fr;
+    max-width: 360px;
+    margin: 0 auto;
+  }
+
+  .hero-title {
+    font-size: 2.6rem;
+  }
+
+  .intro {
+    padding: 90px 0 60px;
+  }
+}
