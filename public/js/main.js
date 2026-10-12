@@ -1,3 +1,7 @@
+// Recipes can be filtered by category with ?kategoria=<name> on the front page.
+var CATEGORY_PARAM = 'kategoria';
+var FINNISH_ORDER = new Intl.Collator('fi', { sensitivity: 'base' });
+
 document.addEventListener('DOMContentLoaded', function () {
   var header = document.getElementById('siteHeader');
   var menuToggle = document.getElementById('menuToggle');
@@ -21,12 +25,13 @@ document.addEventListener('DOMContentLoaded', function () {
     menuToggle.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
   });
 
-  navLinks.querySelectorAll('a').forEach(function (link) {
-    link.addEventListener('click', function () {
+  // Delegated, so links added to the category submenu later close the menu too.
+  navLinks.addEventListener('click', function (event) {
+    if (event.target.closest('a')) {
       navLinks.classList.remove('is-open');
       menuToggle.classList.remove('is-open');
       menuToggle.setAttribute('aria-expanded', 'false');
-    });
+    }
   });
 
   var yearEl = document.getElementById('year');
@@ -34,17 +39,92 @@ document.addEventListener('DOMContentLoaded', function () {
     yearEl.textContent = new Date().getFullYear();
   }
 
+  var categoryFilter = new URLSearchParams(window.location.search).get(CATEGORY_PARAM);
+
+  var categoryMenu = document.getElementById('categoryMenu');
+  if (categoryMenu) {
+    loadCategoryMenu(categoryMenu, categoryFilter);
+  }
+
   var recipeGrid = document.getElementById('recipeGrid');
   if (recipeGrid) {
-    loadRecipes(recipeGrid);
+    loadRecipes(recipeGrid, categoryFilter);
   }
 });
+
+function fetchJson(path) {
+  return fetch(path, { headers: { 'Accept': 'application/json' } }).then(function (response) {
+    if (!response.ok) {
+      throw new Error('HTTP ' + response.status);
+    }
+    return response.json();
+  });
+}
+
+function sameCategory(a, b) {
+  return FINNISH_ORDER.compare(a, b) === 0;
+}
+
+function categoryUrl(name) {
+  var params = new URLSearchParams();
+  params.set(CATEGORY_PARAM, name);
+  return '/?' + params.toString() + '#reseptit';
+}
+
+// Category submenu under "Reseptit", alphabetically.
+
+function loadCategoryMenu(menu, currentCategory) {
+  fetchJson('/api/categories')
+    .then(function (categories) {
+      if (categories.length === 0) {
+        return;
+      }
+      categories.sort(function (a, b) {
+        return FINNISH_ORDER.compare(a.name, b.name);
+      });
+      var items = categories.map(function (category) {
+        var item = document.createElement('li');
+        var link = document.createElement('a');
+        link.href = categoryUrl(category.name);
+        link.textContent = category.name;
+        if (currentCategory && sameCategory(category.name, currentCategory)) {
+          link.setAttribute('aria-current', 'page');
+        }
+        item.appendChild(link);
+        return item;
+      });
+      menu.replaceChildren.apply(menu, items);
+      menu.hidden = false;
+      menu.parentNode.classList.add('has-submenu');
+    })
+    .catch(function () {
+      // Without categories the plain "Reseptit" link still works.
+    });
+}
+
+// Recipe grid on the front page.
 
 function showRecipeStatus(grid, message) {
   var status = document.createElement('p');
   status.className = 'recipe-grid-status';
   status.textContent = message;
   grid.replaceChildren(status);
+}
+
+function showCategoryFilter(category) {
+  var filter = document.getElementById('recipeFilter');
+  if (!filter) {
+    return;
+  }
+  var label = document.createElement('span');
+  label.textContent = 'Kategoria: ';
+  var name = document.createElement('strong');
+  name.textContent = category;
+  var reset = document.createElement('a');
+  reset.href = '/#reseptit';
+  reset.textContent = 'Näytä kaikki reseptit';
+  filter.replaceChildren(label, name, reset);
+  filter.hidden = false;
 }
 
 function createRecipeCard(recipe) {
@@ -68,6 +148,10 @@ function createRecipeCard(recipe) {
 
   var info = document.createElement('div');
   info.className = 'recipe-info';
+  var tag = document.createElement('a');
+  tag.className = 'recipe-tag';
+  tag.href = categoryUrl(recipe.category);
+  tag.textContent = recipe.category;
   var title = document.createElement('h3');
   var titleLink = document.createElement('a');
   titleLink.href = '#';
@@ -75,23 +159,27 @@ function createRecipeCard(recipe) {
   title.appendChild(titleLink);
   var description = document.createElement('p');
   description.textContent = recipe.description;
-  info.append(title, description);
+  info.append(tag, title, description);
 
   card.append(thumb, info);
   return card;
 }
 
-function loadRecipes(grid) {
-  fetch('/api/recipes', { headers: { 'Accept': 'application/json' } })
-    .then(function (response) {
-      if (!response.ok) {
-        throw new Error('HTTP ' + response.status);
-      }
-      return response.json();
-    })
+function loadRecipes(grid, categoryFilter) {
+  if (categoryFilter) {
+    showCategoryFilter(categoryFilter);
+  }
+  fetchJson('/api/recipes')
     .then(function (recipes) {
+      if (categoryFilter) {
+        recipes = recipes.filter(function (recipe) {
+          return sameCategory(recipe.category, categoryFilter);
+        });
+      }
       if (recipes.length === 0) {
-        showRecipeStatus(grid, 'Reseptejä ei ole vielä julkaistu.');
+        showRecipeStatus(grid, categoryFilter
+          ? 'Tässä kategoriassa ei ole vielä reseptejä.'
+          : 'Reseptejä ei ole vielä julkaistu.');
         return;
       }
       grid.replaceChildren.apply(grid, recipes.map(createRecipeCard));

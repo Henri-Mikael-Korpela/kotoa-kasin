@@ -37,6 +37,23 @@
       <p class="form-error" id="listError" role="alert"></p>
       <ul class="recipe-list" id="recipeList"></ul>
       <p class="admin-status" id="listStatus" aria-live="polite">Ladataan reseptejä&hellip;</p>
+
+      <section class="admin-section" aria-labelledby="categoriesTitle">
+        <div class="admin-toolbar">
+          <div>
+            <h2 id="categoriesTitle">Kategoriat</h2>
+            <p>Jokainen resepti kuuluu yhteen kategoriaan. Kategorian voi poistaa vasta, kun siinä ei ole reseptejä.</p>
+          </div>
+        </div>
+
+        <form class="category-add" id="categoryForm" novalidate>
+          <label class="visually-hidden" for="newCategoryName">Uuden kategorian nimi</label>
+          <input id="newCategoryName" type="text" maxlength="60" placeholder="Uuden kategorian nimi" autocomplete="off">
+          <button type="submit" class="btn btn-primary">Lisää kategoria</button>
+        </form>
+        <p class="form-error" id="categoryError" role="alert"></p>
+        <ul class="category-list" id="categoryList"></ul>
+      </section>
     </div>
   </main>
 

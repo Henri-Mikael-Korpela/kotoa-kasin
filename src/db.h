@@ -1,6 +1,6 @@
 /**
  * @file db.h
- * @brief Recipe storage in SQLite.
+ * @brief Recipe and category storage in SQLite.
  *
  * SQLite is configured to take all of its memory from a fixed buddy heap
  * handed over at startup, so it never calls malloc. Every worker thread owns
@@ -25,6 +25,7 @@ typedef enum {
     DB_OK,
     DB_NOT_FOUND,
     DB_INVALID,    /**< Malformed JSON or a value that breaks the schema's rules. */
+    DB_CONFLICT,   /**< A duplicate name, or a category that recipes still use. */
     DB_TOO_LARGE,  /**< The result did not fit in the output buffer. */
     DB_BUSY,       /**< The database stayed locked by another writer. */
     DB_ERROR,
@@ -38,6 +39,11 @@ typedef struct {
     sqlite3_stmt *insert_recipe;
     sqlite3_stmt *update_recipe;
     sqlite3_stmt *delete_recipe;
+    sqlite3_stmt *list_categories;
+    sqlite3_stmt *get_category;
+    sqlite3_stmt *insert_category;
+    sqlite3_stmt *update_category;
+    sqlite3_stmt *delete_category;
     sqlite3_stmt *parse_login;
 } Db;
 
@@ -52,8 +58,8 @@ typedef struct {
 bool db_global_init(void *heap_mem, size_t heap_size);
 
 /**
- * Creates the database file and schema if needed, and seeds the initial
- * recipes into an empty table.
+ * Creates the database file if needed and migrates its schema to the current
+ * version, seeding initial data on the way.
  *
  * @return False on failure, after printing why.
  */
@@ -72,7 +78,8 @@ bool db_open(Db *db, char const *path);
 void db_close(Db *db);
 
 /**
- * Appends all recipes as a JSON array of {id, name, image, description}.
+ * Appends all recipes as a JSON array of
+ * {id, name, image, description, category_id, category}.
  */
 Db_Status db_list_recipes_json(Db *db, Str_Builder *out);
 
@@ -82,14 +89,15 @@ Db_Status db_list_recipes_json(Db *db, Str_Builder *out);
 Db_Status db_get_recipe_json(Db *db, int64_t id, Str_Builder *out);
 
 /**
- * Inserts a recipe from a JSON object with name, image and description.
+ * Inserts a recipe from a JSON object with name, image, description and
+ * category_id. The category must exist.
  *
  * @param id Receives the new recipe's id.
  */
 Db_Status db_create_recipe(Db *db, Str json, int64_t *id);
 
 /**
- * Replaces a recipe's fields from a JSON object with name, image and description.
+ * Replaces a recipe's fields from a JSON object like db_create_recipe() takes.
  */
 Db_Status db_update_recipe(Db *db, int64_t id, Str json);
 
@@ -97,6 +105,39 @@ Db_Status db_update_recipe(Db *db, int64_t id, Str json);
  * Deletes a recipe.
  */
 Db_Status db_delete_recipe(Db *db, int64_t id);
+
+/**
+ * Appends all categories, alphabetically, as a JSON array of
+ * {id, name, recipe_count}.
+ */
+Db_Status db_list_categories_json(Db *db, Str_Builder *out);
+
+/**
+ * Appends one category as a JSON object.
+ */
+Db_Status db_get_category_json(Db *db, int64_t id, Str_Builder *out);
+
+/**
+ * Inserts a category from a JSON object with a name.
+ *
+ * @param id Receives the new category's id.
+ * @return DB_CONFLICT when the name is already taken (ignoring case).
+ */
+Db_Status db_create_category(Db *db, Str json, int64_t *id);
+
+/**
+ * Renames a category from a JSON object with a name.
+ *
+ * @return DB_CONFLICT when the name is already taken (ignoring case).
+ */
+Db_Status db_update_category(Db *db, int64_t id, Str json);
+
+/**
+ * Deletes a category.
+ *
+ * @return DB_CONFLICT while recipes still belong to it.
+ */
+Db_Status db_delete_category(Db *db, int64_t id);
 
 /**
  * Extracts the string fields username and password from a JSON object.

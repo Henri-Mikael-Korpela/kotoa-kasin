@@ -134,6 +134,81 @@ img {
   opacity: 0.65;
 }
 
+/* Category submenu under "Reseptit" */
+
+.nav-item {
+  position: relative;
+  /* Flex, so the link is blockified and sized exactly like its sibling links. */
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.nav-item.has-submenu > a::after {
+  content: '';
+  display: inline-block;
+  width: 0.38em;
+  height: 0.38em;
+  margin-left: 0.45em;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: translateY(-0.2em) rotate(45deg);
+}
+
+.nav-submenu {
+  position: absolute;
+  top: 100%;
+  left: -1.1rem;
+  min-width: 190px;
+  margin: 0.9rem 0 0;
+  padding: 0.5rem 0;
+  list-style: none;
+  background: var(--color-bg);
+  border-radius: 3px;
+  box-shadow: 0 10px 30px rgba(43, 42, 37, 0.14), 0 0 0 1px rgba(43, 42, 37, 0.06);
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(-4px);
+  transition: opacity 0.2s ease, transform 0.2s ease, visibility 0.2s;
+}
+
+/* Bridges the gap so the pointer can travel from the link into the menu. */
+.nav-submenu::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: -0.9rem;
+  height: 0.9rem;
+}
+
+.nav-item:hover .nav-submenu,
+.nav-item:focus-within .nav-submenu {
+  opacity: 1;
+  visibility: visible;
+  transform: translateY(0);
+}
+
+.nav-links .nav-submenu a {
+  display: block;
+  padding: 0.5rem 1.1rem;
+  color: var(--color-text);
+  white-space: nowrap;
+}
+
+.nav-links .nav-submenu a:hover,
+.nav-links .nav-submenu a:focus-visible {
+  opacity: 1;
+  color: var(--color-lilac-dark);
+  background: var(--color-lilac-light);
+  outline: none;
+}
+
+.nav-links .nav-submenu a[aria-current="page"] {
+  opacity: 1;
+  color: var(--color-lilac-dark);
+}
+
 .menu-toggle {
   display: none;
   flex-direction: column;
@@ -518,6 +593,38 @@ img {
   margin: 0;
 }
 
+a.recipe-tag:hover {
+  color: var(--color-text);
+}
+
+.recipe-filter {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  align-items: baseline;
+  gap: 0.4rem 0.6rem;
+  margin: -2rem 0 2.6rem;
+  font-size: 0.95rem;
+}
+
+.recipe-filter strong {
+  font-weight: 500;
+  color: var(--color-text);
+}
+
+.recipe-filter a {
+  margin-left: 0.6rem;
+  font-size: 0.82rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--color-lilac-dark);
+  border-bottom: 1px solid currentColor;
+}
+
+.recipe-filter a:hover {
+  color: var(--color-text);
+}
+
 .recipe-grid-status {
   grid-column: 1 / -1;
   text-align: center;
@@ -653,6 +760,39 @@ img {
   .nav-links a {
     color: var(--color-text);
     font-size: 1.1rem;
+  }
+
+  .nav-item.has-submenu > a::after {
+    display: none;
+  }
+
+  .nav-submenu,
+  .nav-item:hover .nav-submenu,
+  .nav-item:focus-within .nav-submenu {
+    position: static;
+    min-width: 0;
+    margin: 0.6rem 0 0;
+    padding: 0;
+    background: none;
+    box-shadow: none;
+    opacity: 1;
+    visibility: visible;
+    transform: none;
+  }
+
+  .nav-submenu::before {
+    display: none;
+  }
+
+  .nav-links .nav-submenu a {
+    padding: 0.3rem 0;
+    font-size: 0.95rem;
+    color: var(--color-text-muted);
+  }
+
+  .nav-links .nav-submenu a:hover,
+  .nav-links .nav-submenu a:focus-visible {
+    background: none;
   }
 
   .menu-toggle {

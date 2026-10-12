@@ -7,11 +7,15 @@
 static Buddy_Heap DB_HEAP;
 
 /*
- * The schema enforces the rules for recipe fields, so invalid input from the
+ * Schema migrations, applied in order. PRAGMA user_version records how many
+ * have run, and each one runs in its own transaction.
+ *
+ * The schema enforces the rules for every field, so invalid input from the
  * API surfaces as a constraint failure no matter which statement wrote it.
  */
-static char const SCHEMA_SQL[] =
-    "PRAGMA journal_mode = WAL;"
+
+// 1: recipes, seeded with the site's original recipes.
+static char const MIGRATION_RECIPES[] =
     "CREATE TABLE IF NOT EXISTS recipes ("
     "    id          INTEGER PRIMARY KEY,"
     "    name        TEXT NOT NULL"
@@ -20,10 +24,9 @@ static char const SCHEMA_SQL[] =
     "                CHECK (typeof(image) = 'text' AND length(image) <= 500),"
     "    description TEXT NOT NULL"
     "                CHECK (typeof(description) = 'text' AND length(description) <= 2000)"
-    ");";
-
-static char const SEED_SQL[] =
-    "INSERT INTO recipes (name, image, description) VALUES"
+    ");"
+    "INSERT INTO recipes (name, image, description)"
+    " SELECT column1, column2, column3 FROM (VALUES"
     " ('Laventelisaippua', '/assets/recipes/laventelisaippua.jpg',"
     "  'Rauhoittava käsintehty saippua kuivalle iholle.'),"
     " ('Yrttivoide kuivalle iholle', '/assets/recipes/yrttivoide.jpg',"
@@ -39,7 +42,49 @@ static char const SEED_SQL[] =
     " ('Omena-kanelihillo', '/assets/recipes/omenahillo.jpg',"
     "  'Syksyn omenista, kanelista ja tähtianiksesta.'),"
     " ('Yrttisuola', '/assets/recipes/yrttisuola.jpg',"
-    "  'Kuivatuista yrteistä sekoitettu mauste-suola.');";
+    "  'Kuivatuista yrteistä sekoitettu mauste-suola.'))"
+    " WHERE NOT EXISTS (SELECT 1 FROM recipes);";
+
+/*
+ * 2: categories. Every recipe gets one; existing recipes go to Ruoanlaitto,
+ * and the first Kosmetiikka recipe is added. SQLite cannot add a NOT NULL
+ * foreign key column in place, so the recipes table is rebuilt.
+ */
+static char const MIGRATION_CATEGORIES[] =
+    "CREATE TABLE categories ("
+    "    id   INTEGER PRIMARY KEY,"
+    "    name TEXT NOT NULL UNIQUE COLLATE NOCASE"
+    "         CHECK (typeof(name) = 'text' AND length(trim(name)) BETWEEN 1 AND 60)"
+    ");"
+    "INSERT INTO categories (name) VALUES ('Kosmetiikka'), ('Ruoanlaitto');"
+    "CREATE TABLE recipes_new ("
+    "    id          INTEGER PRIMARY KEY,"
+    "    category_id INTEGER NOT NULL REFERENCES categories (id) ON DELETE RESTRICT,"
+    "    name        TEXT NOT NULL"
+    "                CHECK (typeof(name) = 'text' AND length(trim(name)) BETWEEN 1 AND 200),"
+    "    image       TEXT NOT NULL"
+    "                CHECK (typeof(image) = 'text' AND length(image) <= 500),"
+    "    description TEXT NOT NULL"
+    "                CHECK (typeof(description) = 'text' AND length(description) <= 2000)"
+    ");"
+    "INSERT INTO recipes_new (id, category_id, name, image, description)"
+    " SELECT id, (SELECT id FROM categories WHERE name = 'Ruoanlaitto'), name, image, description"
+    " FROM recipes;"
+    "DROP TABLE recipes;"
+    "ALTER TABLE recipes_new RENAME TO recipes;"
+    "CREATE INDEX recipes_by_category ON recipes (category_id);"
+    "INSERT INTO recipes (category_id, name, image, description) VALUES ("
+    " (SELECT id FROM categories WHERE name = 'Kosmetiikka'),"
+    " 'Mehiläisvahahuulivoide', '/assets/recipes/huulivoide.jpg',"
+    " 'Pehmentävä huulivoide mehiläisvahasta, sheavoista ja kylmäpuristetusta"
+    " auringonkukkaöljystä. Valmistuu vartissa ja riittää koko talveksi.');";
+
+static char const *const MIGRATIONS[] = {
+    MIGRATION_RECIPES,
+    MIGRATION_CATEGORIES,
+};
+
+#define MIGRATION_COUNT ((int)(sizeof MIGRATIONS / sizeof MIGRATIONS[0]))
 
 // SQLite memory methods backed by the buddy heap.
 
@@ -122,7 +167,33 @@ static bool open_connection(sqlite3 **conn, char const *path) {
         return false;
     }
     sqlite3_busy_timeout(*conn, 5000);
+    sqlite3_extended_result_codes(*conn, 1);  // Tells unique and foreign key failures apart.
     return exec(*conn, "PRAGMA synchronous = NORMAL; PRAGMA cache_size = -512;");
+}
+
+static bool read_user_version(sqlite3 *conn, int *version) {
+    sqlite3_stmt *stmt = NULL;
+    bool ok = sqlite3_prepare_v2(conn, "PRAGMA user_version", -1, &stmt, NULL) == SQLITE_OK &&
+              sqlite3_step(stmt) == SQLITE_ROW;
+    if (ok) {
+        *version = sqlite3_column_int(stmt, 0);
+    }
+    sqlite3_finalize(stmt);
+    return ok;
+}
+
+static bool run_migration(sqlite3 *conn, int index) {
+    char version_sql[64];
+    snprintf(version_sql, sizeof version_sql, "PRAGMA user_version = %d;", index + 1);
+    if (!exec(conn, "BEGIN IMMEDIATE;")) {
+        return false;
+    }
+    if (exec(conn, MIGRATIONS[index]) && exec(conn, version_sql) && exec(conn, "COMMIT;")) {
+        fprintf(stderr, "db: migrated schema to version %d\n", index + 1);
+        return true;
+    }
+    exec(conn, "ROLLBACK;");
+    return false;
 }
 
 bool db_prepare_file(char const *path) {
@@ -130,30 +201,57 @@ bool db_prepare_file(char const *path) {
     if (!open_connection(&conn, path)) {
         return false;
     }
-    bool ok = exec(conn, SCHEMA_SQL);
+    // Table rebuilds in migrations need foreign keys off; checked once at the end.
+    bool ok = exec(conn, "PRAGMA journal_mode = WAL; PRAGMA foreign_keys = OFF;");
 
-    sqlite3_stmt *count = NULL;
-    if (ok && sqlite3_prepare_v2(conn, "SELECT count(*) FROM recipes", -1, &count, NULL) != SQLITE_OK) {
+    int version = 0;
+    ok = ok && read_user_version(conn, &version);
+    if (ok && version > MIGRATION_COUNT) {
+        fprintf(stderr, "db: schema version %d is newer than this server knows\n", version);
         ok = false;
     }
-    if (ok && sqlite3_step(count) == SQLITE_ROW && sqlite3_column_int64(count, 0) == 0) {
-        ok = exec(conn, SEED_SQL);
+    for (int i = version; ok && i < MIGRATION_COUNT; i++) {
+        ok = run_migration(conn, i);
     }
-    sqlite3_finalize(count);
+
+    sqlite3_stmt *check = NULL;
+    if (ok && sqlite3_prepare_v2(conn, "PRAGMA foreign_key_check", -1, &check, NULL) == SQLITE_OK &&
+        sqlite3_step(check) == SQLITE_ROW) {
+        fputs("db: foreign key check failed\n", stderr);
+        ok = false;
+    }
+    sqlite3_finalize(check);
     sqlite3_close(conn);
     return ok;
 }
 
 /**
- * SQL for a recipe field taken from the JSON in parameter ?param: its value
- * when it is a JSON string, missing_value when the key is absent, and NULL
- * (which NOT NULL rejects) for any other JSON type. Without this, TEXT column
- * affinity would quietly turn a JSON number into text.
+ * SQL for a field taken from the JSON in parameter ?param: its value when it
+ * is a JSON string, missing_value when the key is absent, and NULL (which NOT
+ * NULL rejects) for any other JSON type. Without this, TEXT column affinity
+ * would quietly turn a JSON number into text.
  */
 #define TEXT_FIELD(param, key, missing_value)                            \
     "CASE coalesce(json_type(?" param ", '$." key "'), 'missing')"       \
     " WHEN 'text' THEN json_extract(?" param ", '$." key "')"            \
     " WHEN 'missing' THEN " missing_value " END"
+
+/**
+ * SQL for a required integer field from the JSON in parameter ?param, or NULL
+ * when it is missing or not an integer.
+ */
+#define INTEGER_FIELD(param, key)                                        \
+    "CASE json_type(?" param ", '$." key "')"                            \
+    " WHEN 'integer' THEN json_extract(?" param ", '$." key "') END"
+
+// Columns of a recipe joined with its category, in the shape the API returns.
+#define RECIPE_JSON                                                      \
+    "json_object('id', r.id, 'name', r.name, 'image', r.image,"          \
+    " 'description', r.description, 'category_id', c.id, 'category', c.name)"
+
+#define CATEGORY_JSON                                                    \
+    "json_object('id', c.id, 'name', c.name, 'recipe_count',"            \
+    " (SELECT count(*) FROM recipes WHERE category_id = c.id))"
 
 static bool prepare(Db *db, sqlite3_stmt **stmt, char const *sql) {
     if (sqlite3_prepare_v3(db->conn, sql, -1, SQLITE_PREPARE_PERSISTENT, stmt, NULL) != SQLITE_OK) {
@@ -172,35 +270,55 @@ bool db_open(Db *db, char const *path) {
         .insert_recipe = NULL,
         .update_recipe = NULL,
         .delete_recipe = NULL,
+        .list_categories = NULL,
+        .get_category = NULL,
+        .insert_category = NULL,
+        .update_category = NULL,
+        .delete_category = NULL,
         .parse_login = NULL,
     };
-    if (!open_connection(&db->conn, path)) {
+    if (!open_connection(&db->conn, path) || !exec(db->conn, "PRAGMA foreign_keys = ON;")) {
+        db_close(db);
         return false;
     }
     bool ok =
         prepare(db, &db->is_json_object,
                 "SELECT CASE WHEN json_valid(?1) THEN json_type(?1) = 'object' ELSE 0 END") &&
         prepare(db, &db->list_recipes,
-                "SELECT json_group_array(json_object("
-                "    'id', id, 'name', name, 'image', image, 'description', description))"
-                " FROM (SELECT * FROM recipes ORDER BY id)") &&
+                "SELECT json_group_array(json(recipe)) FROM ("
+                " SELECT " RECIPE_JSON " AS recipe"
+                " FROM recipes r JOIN categories c ON c.id = r.category_id ORDER BY r.id)") &&
         prepare(db, &db->get_recipe,
-                "SELECT json_object("
-                "    'id', id, 'name', name, 'image', image, 'description', description)"
-                " FROM recipes WHERE id = ?1") &&
+                "SELECT " RECIPE_JSON
+                " FROM recipes r JOIN categories c ON c.id = r.category_id WHERE r.id = ?1") &&
         prepare(db, &db->insert_recipe,
-                "INSERT INTO recipes (name, image, description) VALUES ("
+                "INSERT INTO recipes (category_id, name, image, description) VALUES ("
+                INTEGER_FIELD("1", "category_id") ", "
                 TEXT_FIELD("1", "name", "NULL") ", "
                 TEXT_FIELD("1", "image", "''") ", "
                 TEXT_FIELD("1", "description", "''") ")"
                 " RETURNING id") &&
         prepare(db, &db->update_recipe,
                 "UPDATE recipes SET"
+                " category_id = " INTEGER_FIELD("2", "category_id") ","
                 " name = " TEXT_FIELD("2", "name", "NULL") ","
                 " image = " TEXT_FIELD("2", "image", "''") ","
                 " description = " TEXT_FIELD("2", "description", "''")
                 " WHERE id = ?1") &&
         prepare(db, &db->delete_recipe, "DELETE FROM recipes WHERE id = ?1") &&
+        prepare(db, &db->list_categories,
+                "SELECT json_group_array(json(category)) FROM ("
+                " SELECT " CATEGORY_JSON " AS category"
+                " FROM categories c ORDER BY c.name COLLATE NOCASE)") &&
+        prepare(db, &db->get_category,
+                "SELECT " CATEGORY_JSON " FROM categories c WHERE c.id = ?1") &&
+        prepare(db, &db->insert_category,
+                "INSERT INTO categories (name) VALUES (trim(" TEXT_FIELD("1", "name", "NULL") "))"
+                " RETURNING id") &&
+        prepare(db, &db->update_category,
+                "UPDATE categories SET name = trim(" TEXT_FIELD("2", "name", "NULL") ")"
+                " WHERE id = ?1") &&
+        prepare(db, &db->delete_category, "DELETE FROM categories WHERE id = ?1") &&
         prepare(db, &db->parse_login,
                 "SELECT json_extract(?1, '$.username'), json_extract(?1, '$.password')");
     if (!ok) {
@@ -216,6 +334,11 @@ void db_close(Db *db) {
     sqlite3_finalize(db->insert_recipe);
     sqlite3_finalize(db->update_recipe);
     sqlite3_finalize(db->delete_recipe);
+    sqlite3_finalize(db->list_categories);
+    sqlite3_finalize(db->get_category);
+    sqlite3_finalize(db->insert_category);
+    sqlite3_finalize(db->update_category);
+    sqlite3_finalize(db->delete_category);
     sqlite3_finalize(db->parse_login);
     sqlite3_close(db->conn);
     db->conn = NULL;
@@ -233,6 +356,19 @@ static Db_Status status_from(int rc) {
     default:
         return DB_ERROR;
     }
+}
+
+/*
+ * For category writes, a bad name breaks a CHECK or NOT NULL constraint; any
+ * other constraint (a duplicate name, or a delete that recipes still restrict,
+ * which SQLite may report with more than one extended code) is a conflict.
+ */
+static Db_Status category_status_from(int rc) {
+    if ((rc & 0xff) == SQLITE_CONSTRAINT && rc != SQLITE_CONSTRAINT_CHECK &&
+        rc != SQLITE_CONSTRAINT_NOTNULL) {
+        return DB_CONFLICT;
+    }
+    return status_from(rc);
 }
 
 static void finish(sqlite3_stmt *stmt) {
@@ -283,63 +419,99 @@ static Db_Status append_text_result(sqlite3_stmt *stmt, Str_Builder *out) {
     return status;
 }
 
+static Db_Status get_json(sqlite3_stmt *stmt, int64_t id, Str_Builder *out) {
+    sqlite3_bind_int64(stmt, 1, id);
+    return append_text_result(stmt, out);
+}
+
+// Runs an INSERT ... RETURNING id with the JSON body bound to ?1.
+static Db_Status insert_from_json(Db *db, sqlite3_stmt *stmt, Str json, int64_t *id,
+                                  Db_Status (*map_error)(int)) {
+    Db_Status status = check_json_object(db, json);
+    if (status != DB_OK) {
+        return status;
+    }
+    bind_str(stmt, 1, json);
+    int rc = sqlite3_step(stmt);
+    if (rc == SQLITE_ROW) {
+        *id = sqlite3_column_int64(stmt, 0);
+        rc = sqlite3_step(stmt);  // Runs the statement to completion.
+    }
+    status = rc == SQLITE_DONE ? DB_OK : map_error(rc);
+    finish(stmt);
+    return status;
+}
+
+// Runs an UPDATE or DELETE whose row id is bound to ?1; no change means not found.
+static Db_Status change_row(Db *db, sqlite3_stmt *stmt, Db_Status (*map_error)(int)) {
+    int rc = sqlite3_step(stmt);
+    Db_Status status;
+    if (rc != SQLITE_DONE) {
+        status = map_error(rc);
+    } else if (sqlite3_changes(db->conn) == 0) {
+        status = DB_NOT_FOUND;
+    } else {
+        status = DB_OK;
+    }
+    finish(stmt);
+    return status;
+}
+
+static Db_Status update_from_json(Db *db, sqlite3_stmt *stmt, int64_t id, Str json,
+                                  Db_Status (*map_error)(int)) {
+    Db_Status status = check_json_object(db, json);
+    if (status != DB_OK) {
+        return status;
+    }
+    sqlite3_bind_int64(stmt, 1, id);
+    bind_str(stmt, 2, json);
+    return change_row(db, stmt, map_error);
+}
+
+static Db_Status delete_row(Db *db, sqlite3_stmt *stmt, int64_t id, Db_Status (*map_error)(int)) {
+    sqlite3_bind_int64(stmt, 1, id);
+    return change_row(db, stmt, map_error);
+}
+
 Db_Status db_list_recipes_json(Db *db, Str_Builder *out) {
     return append_text_result(db->list_recipes, out);
 }
 
 Db_Status db_get_recipe_json(Db *db, int64_t id, Str_Builder *out) {
-    sqlite3_bind_int64(db->get_recipe, 1, id);
-    return append_text_result(db->get_recipe, out);
+    return get_json(db->get_recipe, id, out);
 }
 
+// A recipe pointing at a missing category is invalid input, not a conflict.
 Db_Status db_create_recipe(Db *db, Str json, int64_t *id) {
-    Db_Status status = check_json_object(db, json);
-    if (status != DB_OK) {
-        return status;
-    }
-    bind_str(db->insert_recipe, 1, json);
-    int rc = sqlite3_step(db->insert_recipe);
-    if (rc == SQLITE_ROW) {
-        *id = sqlite3_column_int64(db->insert_recipe, 0);
-        rc = sqlite3_step(db->insert_recipe);  // Runs the statement to completion.
-    }
-    status = rc == SQLITE_DONE ? DB_OK : status_from(rc);
-    finish(db->insert_recipe);
-    return status;
+    return insert_from_json(db, db->insert_recipe, json, id, status_from);
 }
 
 Db_Status db_update_recipe(Db *db, int64_t id, Str json) {
-    Db_Status status = check_json_object(db, json);
-    if (status != DB_OK) {
-        return status;
-    }
-    sqlite3_bind_int64(db->update_recipe, 1, id);
-    bind_str(db->update_recipe, 2, json);
-    int rc = sqlite3_step(db->update_recipe);
-    if (rc != SQLITE_DONE) {
-        status = status_from(rc);
-    } else if (sqlite3_changes(db->conn) == 0) {
-        status = DB_NOT_FOUND;
-    } else {
-        status = DB_OK;
-    }
-    finish(db->update_recipe);
-    return status;
+    return update_from_json(db, db->update_recipe, id, json, status_from);
 }
 
 Db_Status db_delete_recipe(Db *db, int64_t id) {
-    sqlite3_bind_int64(db->delete_recipe, 1, id);
-    int rc = sqlite3_step(db->delete_recipe);
-    Db_Status status;
-    if (rc != SQLITE_DONE) {
-        status = status_from(rc);
-    } else if (sqlite3_changes(db->conn) == 0) {
-        status = DB_NOT_FOUND;
-    } else {
-        status = DB_OK;
-    }
-    finish(db->delete_recipe);
-    return status;
+    return delete_row(db, db->delete_recipe, id, status_from);
+}
+
+Db_Status db_list_categories_json(Db *db, Str_Builder *out) {
+    return append_text_result(db->list_categories, out);
+}
+
+Db_Status db_get_category_json(Db *db, int64_t id, Str_Builder *out) {
+    return get_json(db->get_category, id, out);
+}
+
+Db_Status db_create_category(Db *db, Str json, int64_t *id) {
+    return insert_from_json(db, db->insert_category, json, id, category_status_from);
+}
+
+Db_Status db_update_category(Db *db, int64_t id, Str json) {
+    return update_from_json(db, db->update_category, id, json, category_status_from);
+}
+
+Db_Status db_delete_category(Db *db, int64_t id) {
+    return delete_row(db, db->delete_category, id, category_status_from);
 }
 
 static bool append_text_column(sqlite3_stmt *stmt, int column, Str_Builder *out) {

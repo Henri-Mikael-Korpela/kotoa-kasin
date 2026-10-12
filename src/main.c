@@ -221,6 +221,8 @@ static Str status_reason(int status) {
         return STR("Not Found");
     case 405:
         return STR("Method Not Allowed");
+    case 409:
+        return STR("Conflict");
     case 411:
         return STR("Length Required");
     case 413:
@@ -327,10 +329,13 @@ static void respond_json_error(Conn *c, int status, Str message, Str extra_heade
 static void respond_db_error(Conn *c, Db_Status status) {
     switch (status) {
     case DB_NOT_FOUND:
-        respond_json_error(c, 404, STR("recipe not found"), NO_STORE);
+        respond_json_error(c, 404, STR("not found"), NO_STORE);
         break;
     case DB_INVALID:
         respond_json_error(c, 400, STR("invalid request body"), NO_STORE);
+        break;
+    case DB_CONFLICT:
+        respond_json_error(c, 409, STR("conflict with existing data"), NO_STORE);
         break;
     case DB_BUSY:
         respond_json_error(c, 503, STR("database busy"),
@@ -569,29 +574,39 @@ static void api_session(Conn *c, Request const *r) {
     respond_built(c, 200, JSON_TYPE, &body, r->head_only, NO_STORE);
 }
 
-static void api_list_recipes(Worker *w, Conn *c, Request const *r) {
-    Str_Builder body;
-    body_begin(c, &body);
-    Db_Status status = db_list_recipes_json(&w->db, &body);
-    if (status != DB_OK) {
-        respond_db_error(c, status);
-        return;
-    }
-    respond_built(c, 200, JSON_TYPE, &body, r->head_only, NO_STORE);
-}
+/**
+ * A collection exposed as /api/{name} and /api/{name}/{id}. Reads are public;
+ * writes need a valid session.
+ */
+typedef struct {
+    Str       path;  /**< Collection path, e.g. "/api/recipes". */
+    Db_Status (*list)(Db *db, Str_Builder *out);
+    Db_Status (*get)(Db *db, int64_t id, Str_Builder *out);
+    Db_Status (*create)(Db *db, Str json, int64_t *id);
+    Db_Status (*update)(Db *db, int64_t id, Str json);
+    Db_Status (*remove)(Db *db, int64_t id);
+} Resource;
 
-static void api_get_recipe(Worker *w, Conn *c, Request const *r, int64_t id) {
-    Str_Builder body;
-    body_begin(c, &body);
-    Db_Status status = db_get_recipe_json(&w->db, id, &body);
-    if (status != DB_OK) {
-        respond_db_error(c, status);
-        return;
-    }
-    respond_built(c, 200, JSON_TYPE, &body, r->head_only, NO_STORE);
-}
+static Resource const RESOURCES[] = {
+    {
+        .path = STR_INIT("/api/recipes"),
+        .list = db_list_recipes_json,
+        .get = db_get_recipe_json,
+        .create = db_create_recipe,
+        .update = db_update_recipe,
+        .remove = db_delete_recipe,
+    },
+    {
+        .path = STR_INIT("/api/categories"),
+        .list = db_list_categories_json,
+        .get = db_get_category_json,
+        .create = db_create_category,
+        .update = db_update_category,
+        .remove = db_delete_category,
+    },
+};
 
-static void respond_recipe_id(Conn *c, int status, int64_t id) {
+static void respond_id(Conn *c, int status, int64_t id) {
     Str_Builder body;
     body_begin(c, &body);
     str_builder_append(&body, STR("{\"id\":"));
@@ -600,105 +615,154 @@ static void respond_recipe_id(Conn *c, int status, int64_t id) {
     respond_built(c, status, JSON_TYPE, &body, false, NO_STORE);
 }
 
-static void api_create_recipe(Worker *w, Conn *c, Request const *r) {
+static void api_list(Worker *w, Conn *c, Request const *r, Resource const *res) {
+    Str_Builder body;
+    body_begin(c, &body);
+    Db_Status status = res->list(&w->db, &body);
+    if (status != DB_OK) {
+        respond_db_error(c, status);
+        return;
+    }
+    respond_built(c, 200, JSON_TYPE, &body, r->head_only, NO_STORE);
+}
+
+static void api_get(Worker *w, Conn *c, Request const *r, Resource const *res, int64_t id) {
+    Str_Builder body;
+    body_begin(c, &body);
+    Db_Status status = res->get(&w->db, id, &body);
+    if (status != DB_OK) {
+        respond_db_error(c, status);
+        return;
+    }
+    respond_built(c, 200, JSON_TYPE, &body, r->head_only, NO_STORE);
+}
+
+static void api_create(Worker *w, Conn *c, Request const *r, Resource const *res) {
     if (!authenticate(r, NULL)) {
         respond_unauthorized(c);
         return;
     }
     int64_t id;
-    Db_Status status = db_create_recipe(&w->db, r->body, &id);
+    Db_Status status = res->create(&w->db, r->body, &id);
     if (status != DB_OK) {
         respond_db_error(c, status);
         return;
     }
-    respond_recipe_id(c, 201, id);
+    respond_id(c, 201, id);
 }
 
-static void api_update_recipe(Worker *w, Conn *c, Request const *r, int64_t id) {
+static void api_update(Worker *w, Conn *c, Request const *r, Resource const *res, int64_t id) {
     if (!authenticate(r, NULL)) {
         respond_unauthorized(c);
         return;
     }
-    Db_Status status = db_update_recipe(&w->db, id, r->body);
+    Db_Status status = res->update(&w->db, id, r->body);
     if (status != DB_OK) {
         respond_db_error(c, status);
         return;
     }
-    respond_recipe_id(c, 200, id);
+    respond_id(c, 200, id);
 }
 
-static void api_delete_recipe(Worker *w, Conn *c, Request const *r, int64_t id) {
+static void api_delete(Worker *w, Conn *c, Request const *r, Resource const *res, int64_t id) {
     if (!authenticate(r, NULL)) {
         respond_unauthorized(c);
         return;
     }
-    Db_Status status = db_delete_recipe(&w->db, id);
+    Db_Status status = res->remove(&w->db, id);
     if (status != DB_OK) {
         respond_db_error(c, status);
         return;
     }
-    respond_recipe_id(c, 200, id);
+    respond_id(c, 200, id);
+}
+
+static void respond_method_not_allowed(Conn *c, Str allow_header) {
+    respond_json_error(c, 405, STR("method not allowed"), allow_header);
+}
+
+/**
+ * Handles a request whose path is a resource's collection or one of its items.
+ *
+ * @return False when the path belongs to neither.
+ */
+static bool handle_resource(Worker *w, Conn *c, Request const *r, Resource const *res) {
+    bool is_get = str_eq(r->method, STR("GET")) || r->head_only;
+    bool is_post = str_eq(r->method, STR("POST"));
+    bool is_put = str_eq(r->method, STR("PUT"));
+    bool is_delete = str_eq(r->method, STR("DELETE"));
+
+    if (str_eq(r->path, res->path)) {
+        if (is_get) {
+            api_list(w, c, r, res);
+        } else if (is_post) {
+            api_create(w, c, r, res);
+        } else {
+            respond_method_not_allowed(c, STR("Cache-Control: no-store\r\nAllow: GET, HEAD, POST\r\n"));
+        }
+        return true;
+    }
+
+    Str item = str_slice(r->path, res->path.len, r->path.len);
+    if (!str_starts_with(r->path, res->path) || !str_starts_with(item, STR("/"))) {
+        return false;
+    }
+    uint64_t id;
+    if (!str_to_u64(str_slice(item, 1, item.len), &id) || id == 0 || id > INT64_MAX) {
+        respond_db_error(c, DB_NOT_FOUND);
+    } else if (is_get) {
+        api_get(w, c, r, res, (int64_t)id);
+    } else if (is_put) {
+        api_update(w, c, r, res, (int64_t)id);
+    } else if (is_delete) {
+        api_delete(w, c, r, res, (int64_t)id);
+    } else {
+        respond_method_not_allowed(c, STR("Cache-Control: no-store\r\nAllow: GET, HEAD, PUT, DELETE\r\n"));
+    }
+    return true;
 }
 
 /**
  * Routes requests under /api/.
  *
- *   POST /api/login          {username, password} -> {token, expires_at}
- *   GET  /api/session        (auth) -> {username, expires_at}
- *   GET  /api/recipes        -> [{id, name, image, description}, ...]
- *   POST /api/recipes        (auth) {name, image, description} -> 201 {id}
- *   GET  /api/recipes/{id}   -> {id, name, image, description}
- *   PUT  /api/recipes/{id}   (auth) {name, image, description} -> {id}
- *   DELETE /api/recipes/{id} (auth) -> {id}
+ *   POST   /api/login             {username, password} -> {token, expires_at}
+ *   GET    /api/session           (auth) -> {username, expires_at}
+ *
+ *   GET    /api/recipes           -> [{id, name, image, description, category_id, category}, ...]
+ *   POST   /api/recipes           (auth) {name, image, description, category_id} -> 201 {id}
+ *   GET    /api/recipes/{id}      -> {id, name, image, description, category_id, category}
+ *   PUT    /api/recipes/{id}      (auth) {name, image, description, category_id} -> {id}
+ *   DELETE /api/recipes/{id}      (auth) -> {id}
+ *
+ *   GET    /api/categories        -> [{id, name, recipe_count}, ...] alphabetically
+ *   POST   /api/categories        (auth) {name} -> 201 {id}, or 409 if the name is taken
+ *   GET    /api/categories/{id}   -> {id, name, recipe_count}
+ *   PUT    /api/categories/{id}   (auth) {name} -> {id}, or 409 if the name is taken
+ *   DELETE /api/categories/{id}   (auth) -> {id}, or 409 while recipes use it
  */
 static void handle_api(Worker *w, Conn *c, Request const *r) {
-    bool is_get = str_eq(r->method, STR("GET")) || r->head_only;
-    bool is_post = str_eq(r->method, STR("POST"));
-    bool is_put = str_eq(r->method, STR("PUT"));
-    bool is_delete = str_eq(r->method, STR("DELETE"));
-    Str recipe_prefix = STR("/api/recipes/");
-
     if (str_eq(r->path, STR("/api/login"))) {
-        if (is_post) {
+        if (str_eq(r->method, STR("POST"))) {
             api_login(w, c, r);
         } else {
-            respond_json_error(c, 405, STR("method not allowed"),
-                               STR("Cache-Control: no-store\r\nAllow: POST\r\n"));
+            respond_method_not_allowed(c, STR("Cache-Control: no-store\r\nAllow: POST\r\n"));
         }
-    } else if (str_eq(r->path, STR("/api/session"))) {
-        if (is_get) {
+        return;
+    }
+    if (str_eq(r->path, STR("/api/session"))) {
+        if (str_eq(r->method, STR("GET")) || r->head_only) {
             api_session(c, r);
         } else {
-            respond_json_error(c, 405, STR("method not allowed"),
-                               STR("Cache-Control: no-store\r\nAllow: GET, HEAD\r\n"));
+            respond_method_not_allowed(c, STR("Cache-Control: no-store\r\nAllow: GET, HEAD\r\n"));
         }
-    } else if (str_eq(r->path, STR("/api/recipes"))) {
-        if (is_get) {
-            api_list_recipes(w, c, r);
-        } else if (is_post) {
-            api_create_recipe(w, c, r);
-        } else {
-            respond_json_error(c, 405, STR("method not allowed"),
-                               STR("Cache-Control: no-store\r\nAllow: GET, HEAD, POST\r\n"));
-        }
-    } else if (str_starts_with(r->path, recipe_prefix)) {
-        uint64_t id;
-        Str id_text = str_slice(r->path, recipe_prefix.len, r->path.len);
-        if (!str_to_u64(id_text, &id) || id == 0 || id > INT64_MAX) {
-            respond_db_error(c, DB_NOT_FOUND);
-        } else if (is_get) {
-            api_get_recipe(w, c, r, (int64_t)id);
-        } else if (is_put) {
-            api_update_recipe(w, c, r, (int64_t)id);
-        } else if (is_delete) {
-            api_delete_recipe(w, c, r, (int64_t)id);
-        } else {
-            respond_json_error(c, 405, STR("method not allowed"),
-                               STR("Cache-Control: no-store\r\nAllow: GET, HEAD, PUT, DELETE\r\n"));
-        }
-    } else {
-        respond_json_error(c, 404, STR("no such endpoint"), NO_STORE);
+        return;
     }
+    for (size_t i = 0; i < sizeof RESOURCES / sizeof RESOURCES[0]; i++) {
+        if (handle_resource(w, c, r, &RESOURCES[i])) {
+            return;
+        }
+    }
+    respond_json_error(c, 404, STR("no such endpoint"), NO_STORE);
 }
 
 // Routing.

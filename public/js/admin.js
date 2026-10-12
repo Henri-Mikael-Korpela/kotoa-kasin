@@ -160,9 +160,24 @@ function initLoginPage() {
   });
 }
 
-// Recipe list page.
+var FINNISH_ORDER = new Intl.Collator('fi', { sensitivity: 'base' });
 
-function deleteRecipe(row, recipe, button, errorEl) {
+function sortByName(items) {
+  return items.sort(function (a, b) {
+    return FINNISH_ORDER.compare(a.name, b.name);
+  });
+}
+
+function recipeCountText(count) {
+  if (count === 0) {
+    return 'Ei reseptejä';
+  }
+  return count === 1 ? '1 resepti' : count + ' reseptiä';
+}
+
+// Recipe list page: recipes and category management.
+
+function deleteRecipe(row, recipe, button, errorEl, onDeleted) {
   var confirmed = window.confirm('Poistetaanko resepti "' + recipe.name + '"?\n\nPoistoa ei voi perua.');
   if (!confirmed) {
     return;
@@ -188,6 +203,7 @@ function deleteRecipe(row, recipe, button, errorEl) {
           status.hidden = false;
         }
       }, 250);
+      onDeleted();
     })
     .catch(function (error) {
       button.disabled = false;
@@ -197,7 +213,7 @@ function deleteRecipe(row, recipe, button, errorEl) {
     });
 }
 
-function createRecipeRow(recipe, errorEl) {
+function createRecipeRow(recipe, errorEl, onDeleted) {
   var row = document.createElement('li');
   row.className = 'recipe-row';
 
@@ -207,11 +223,14 @@ function createRecipeRow(recipe, errorEl) {
 
   var info = document.createElement('span');
   info.className = 'recipe-row-info';
+  var tag = document.createElement('span');
+  tag.className = 'recipe-tag';
+  tag.textContent = recipe.category;
   var name = document.createElement('h2');
   name.textContent = recipe.name;
   var description = document.createElement('p');
   description.textContent = recipe.description || 'Ei kuvausta.';
-  info.append(name, description);
+  info.append(tag, name, description);
 
   var edit = document.createElement('span');
   edit.className = 'recipe-row-edit';
@@ -225,10 +244,136 @@ function createRecipeRow(recipe, errorEl) {
   remove.textContent = 'Poista';
   remove.setAttribute('aria-label', 'Poista resepti ' + recipe.name);
   remove.addEventListener('click', function () {
-    deleteRecipe(row, recipe, remove, errorEl);
+    deleteRecipe(row, recipe, remove, errorEl, onDeleted);
   });
 
   row.append(link, remove);
+  return row;
+}
+
+function categoryErrorMessage(error, fallback) {
+  if (error.status === 409) {
+    return 'Samanniminen kategoria on jo olemassa.';
+  }
+  if (error.status === 400) {
+    return 'Anna kategorialle nimi (enintään 60 merkkiä).';
+  }
+  return messageFor(error, fallback);
+}
+
+function createCategoryButton(text, extraClass) {
+  var button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'category-button' + (extraClass ? ' ' + extraClass : '');
+  button.textContent = text;
+  return button;
+}
+
+// Builds a category row that can switch between display and rename modes.
+function createCategoryRow(category, errorEl, onChanged) {
+  var row = document.createElement('li');
+  row.className = 'category-row';
+
+  function showDisplay() {
+    var name = document.createElement('span');
+    name.className = 'category-name';
+    name.textContent = category.name;
+
+    var count = document.createElement('span');
+    count.className = 'category-count';
+    count.textContent = recipeCountText(category.recipe_count);
+
+    var rename = createCategoryButton('Nimeä uudelleen');
+    rename.setAttribute('aria-label', 'Nimeä kategoria ' + category.name + ' uudelleen');
+    rename.addEventListener('click', showRename);
+
+    var remove = createCategoryButton('Poista', 'is-danger');
+    remove.setAttribute('aria-label', 'Poista kategoria ' + category.name);
+    if (category.recipe_count > 0) {
+      remove.disabled = true;
+      remove.title = 'Kategoriassa on reseptejä. Siirrä ne ensin toiseen kategoriaan.';
+    }
+    remove.addEventListener('click', function () {
+      if (!window.confirm('Poistetaanko kategoria "' + category.name + '"?')) {
+        return;
+      }
+      errorEl.textContent = '';
+      remove.disabled = true;
+      api('DELETE', '/api/categories/' + encodeURIComponent(category.id))
+        .then(onChanged, function (error) {
+          remove.disabled = false;
+          if (error.status === 409) {
+            errorEl.textContent = 'Kategoriassa "' + category.name + '" on reseptejä. Siirrä ne ensin toiseen kategoriaan.';
+            onChanged();
+          } else if (error.status === 404) {
+            onChanged();
+          } else if (error.status !== 401) {
+            errorEl.textContent = messageFor(error, 'Kategorian poistaminen epäonnistui.');
+          }
+        });
+    });
+
+    var actions = document.createElement('span');
+    actions.className = 'category-actions';
+    actions.append(rename, remove);
+    row.replaceChildren(name, count, actions);
+  }
+
+  function showRename() {
+    var form = document.createElement('form');
+    form.className = 'category-rename';
+    form.noValidate = true;
+
+    var input = document.createElement('input');
+    input.type = 'text';
+    input.maxLength = 60;
+    input.value = category.name;
+    input.setAttribute('aria-label', 'Kategorian uusi nimi');
+
+    var save = createCategoryButton('Tallenna', 'is-primary');
+    save.type = 'submit';
+    var cancel = createCategoryButton('Peruuta');
+    cancel.addEventListener('click', showDisplay);
+    input.addEventListener('keydown', function (event) {
+      if (event.key === 'Escape') {
+        showDisplay();
+      }
+    });
+
+    form.addEventListener('submit', function (event) {
+      event.preventDefault();
+      var name = input.value.trim();
+      if (!name) {
+        errorEl.textContent = 'Anna kategorialle nimi.';
+        input.focus();
+        return;
+      }
+      if (name === category.name) {
+        showDisplay();
+        return;
+      }
+      errorEl.textContent = '';
+      save.disabled = true;
+      api('PUT', '/api/categories/' + encodeURIComponent(category.id), { name: name })
+        .then(onChanged, function (error) {
+          save.disabled = false;
+          if (error.status !== 401) {
+            errorEl.textContent = categoryErrorMessage(error, 'Kategorian nimeäminen epäonnistui.');
+            input.focus();
+          }
+        });
+    });
+
+    var actions = document.createElement('span');
+    actions.className = 'category-actions';
+    actions.append(save, cancel);
+    form.append(input, actions);
+    row.replaceChildren(form);
+    input.focus();
+    input.select();
+  }
+
+  showDisplay();
   return row;
 }
 
@@ -236,27 +381,80 @@ function initListPage() {
   var list = document.getElementById('recipeList');
   var status = document.getElementById('listStatus');
   var errorEl = document.getElementById('listError');
+  var categoryList = document.getElementById('categoryList');
+  var categoryError = document.getElementById('categoryError');
+  var categoryForm = document.getElementById('categoryForm');
+  var newCategoryName = document.getElementById('newCategoryName');
   setupLogout();
 
-  requireSession()
-    .then(function () {
-      return api('GET', '/api/recipes');
-    })
-    .then(function (recipes) {
+  function loadRecipes() {
+    return api('GET', '/api/recipes').then(function (recipes) {
       if (recipes.length === 0) {
+        list.replaceChildren();
         status.textContent = 'Reseptejä ei ole vielä. Lisää ensimmäinen resepti yllä olevasta painikkeesta.';
+        status.hidden = false;
         return;
       }
       status.hidden = true;
       list.replaceChildren.apply(list, recipes.map(function (recipe) {
-        return createRecipeRow(recipe, errorEl);
+        return createRecipeRow(recipe, errorEl, loadCategories);
       }));
-    })
-    .catch(function (error) {
+    });
+  }
+
+  function loadCategories() {
+    return api('GET', '/api/categories').then(function (categories) {
+      if (categories.length === 0) {
+        var empty = document.createElement('li');
+        empty.className = 'category-empty';
+        empty.textContent = 'Kategorioita ei ole vielä. Reseptin tallentaminen vaatii kategorian.';
+        categoryList.replaceChildren(empty);
+        return;
+      }
+      categoryList.replaceChildren.apply(categoryList, sortByName(categories).map(function (category) {
+        return createCategoryRow(category, categoryError, reloadAll);
+      }));
+    });
+  }
+
+  // Renames change the category shown on recipes, so both lists refresh together.
+  function reloadAll() {
+    return Promise.all([loadRecipes(), loadCategories()]).catch(function (error) {
       if (error.status !== 401) {
-        status.textContent = messageFor(error, 'Reseptien lataaminen epäonnistui.');
+        status.hidden = false;
+        status.textContent = messageFor(error, 'Tietojen lataaminen epäonnistui.');
       }
     });
+  }
+
+  categoryForm.addEventListener('submit', function (event) {
+    event.preventDefault();
+    var name = newCategoryName.value.trim();
+    if (!name) {
+      categoryError.textContent = 'Anna uudelle kategorialle nimi.';
+      newCategoryName.focus();
+      return;
+    }
+    var button = categoryForm.querySelector('button[type="submit"]');
+    categoryError.textContent = '';
+    button.disabled = true;
+    api('POST', '/api/categories', { name: name })
+      .then(function () {
+        newCategoryName.value = '';
+        return loadCategories();
+      })
+      .catch(function (error) {
+        if (error.status !== 401) {
+          categoryError.textContent = categoryErrorMessage(error, 'Kategorian lisääminen epäonnistui.');
+          newCategoryName.focus();
+        }
+      })
+      .then(function () {
+        button.disabled = false;
+      });
+  });
+
+  requireSession().then(reloadAll);
 }
 
 // Recipe edit page, for both new and existing recipes.
@@ -269,6 +467,7 @@ function initEditPage() {
   var preview = document.getElementById('imagePreview');
   var fields = {
     name: document.getElementById('recipeName'),
+    category: document.getElementById('recipeCategory'),
     image: document.getElementById('recipeImage'),
     description: document.getElementById('recipeDescription')
   };
@@ -281,6 +480,23 @@ function initEditPage() {
   }
   fields.image.addEventListener('input', updatePreview);
 
+  function fillCategories(categories) {
+    var placeholder = document.createElement('option');
+    placeholder.value = '';
+    placeholder.textContent = categories.length > 0 ? 'Valitse kategoria' : 'Ei kategorioita';
+    var options = sortByName(categories).map(function (category) {
+      var option = document.createElement('option');
+      option.value = String(category.id);
+      option.textContent = category.name;
+      return option;
+    });
+    fields.category.replaceChildren.apply(fields.category, [placeholder].concat(options));
+    if (categories.length === 0) {
+      saveButton.disabled = true;
+      errorEl.textContent = 'Kategorioita ei ole vielä. Lisää ensin kategoria reseptilistan alta.';
+    }
+  }
+
   if (id) {
     title.textContent = 'Muokkaa reseptiä';
     document.title = 'Muokkaa reseptiä — Kotoa käsin';
@@ -289,17 +505,23 @@ function initEditPage() {
 
   requireSession()
     .then(function () {
-      if (!id) {
-        fields.name.focus();
-        return;
-      }
-      return api('GET', '/api/recipes/' + encodeURIComponent(id)).then(function (recipe) {
+      return Promise.all([
+        api('GET', '/api/categories'),
+        id ? api('GET', '/api/recipes/' + encodeURIComponent(id)) : null
+      ]);
+    })
+    .then(function (results) {
+      fillCategories(results[0]);
+      var recipe = results[1];
+      if (recipe) {
         fields.name.value = recipe.name;
+        fields.category.value = String(recipe.category_id);
         fields.image.value = recipe.image;
         fields.description.value = recipe.description;
         updatePreview();
         form.hidden = false;
-      });
+      }
+      fields.name.focus();
     })
     .catch(function (error) {
       if (error.status === 401) {
@@ -317,12 +539,18 @@ function initEditPage() {
     errorEl.textContent = '';
     var recipe = {
       name: fields.name.value.trim(),
+      category_id: Number(fields.category.value),
       image: fields.image.value.trim(),
       description: fields.description.value.trim()
     };
     if (!recipe.name) {
       errorEl.textContent = 'Anna reseptille nimi.';
       fields.name.focus();
+      return;
+    }
+    if (!fields.category.value) {
+      errorEl.textContent = 'Valitse reseptille kategoria.';
+      fields.category.focus();
       return;
     }
 
@@ -337,8 +565,9 @@ function initEditPage() {
       .catch(function (error) {
         saveButton.disabled = false;
         if (error.status === 400) {
-          errorEl.textContent = 'Tarkista kentät: nimi on pakollinen ja enintään 200 merkkiä, ' +
-            'kuvan osoite enintään 500 ja kuvaus enintään 2000 merkkiä.';
+          errorEl.textContent = 'Tarkista kentät: nimi ja kategoria ovat pakollisia. Nimi saa olla enintään ' +
+            '200 merkkiä, kuvan osoite 500 ja kuvaus 2000 merkkiä. Jos kategoria poistettiin juuri, ' +
+            'lataa sivu uudelleen.';
         } else if (error.status === 413) {
           errorEl.textContent = 'Resepti on liian pitkä tallennettavaksi. Lyhennä kuvausta.';
         } else if (error.status === 404) {
