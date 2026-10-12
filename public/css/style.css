@@ -389,6 +389,12 @@ img {
   margin: 0;
 }
 
+.recipe-grid-status {
+  grid-column: 1 / -1;
+  text-align: center;
+  margin: 0;
+}
+
 /* ---------------------------------------------------
    Newsletter CTA
 --------------------------------------------------- */

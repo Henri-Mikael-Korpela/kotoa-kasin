@@ -38,6 +38,7 @@
 #include <string.h>
 #include <sys/epoll.h>
 #include <sys/mman.h>
+#include <sys/random.h>
 #include <sys/sendfile.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
@@ -46,6 +47,9 @@
 #include <unistd.h>
 
 #include "arena.h"
+#include "db.h"
+#include "jwt.h"
+#include "sha256.h"
 #include "str.h"
 
 // Compile-time configuration.
@@ -59,6 +63,9 @@
 #ifndef RESP_BUF_SIZE
 #define RESP_BUF_SIZE 32768
 #endif
+#ifndef DB_HEAP_SIZE
+#define DB_HEAP_SIZE (32 * 1024 * 1024)  // SQLite heap; BUDDY_MIN_BLOCK times a power of two.
+#endif
 
 #define MAX_WORKERS       64
 #define EVENT_BATCH       128
@@ -66,8 +73,10 @@
 #define LISTEN_BACKLOG    1024
 #define IDLE_TIMEOUT_SEC  15
 #define MAX_PATH_LEN      1024
+#define HEAD_RESERVE      512   // Room in front of an in-place body for its head.
+#define TOKEN_LIFETIME_SEC (8 * 60 * 60)
 
-static_assert (RESP_BUF_SIZE >= 1024, "RESP_BUF_SIZE too small");
+static_assert (RESP_BUF_SIZE >= 4 * HEAD_RESERVE, "RESP_BUF_SIZE too small");
 static_assert (REQ_BUF_SIZE >= 512, "REQ_BUF_SIZE too small");
 
 #define CACHE_LINE 64
@@ -104,10 +113,16 @@ typedef struct Worker {
     Conn               *conns;
     Conn               *free_list;
     struct epoll_event *events;
+    Db                  db;  /**< This worker's own database connection. */
 } Worker;
 
 static volatile sig_atomic_t STOP_REQUESTED = 0;
 static int ROOT_FD = -1;  // Directory static files are served from.
+static uint8_t JWT_KEY[SHA256_DIGEST_SIZE];  // Signs session tokens.
+
+// Fixed admin credentials for now.
+static Str const ADMIN_USERNAME = STR_INIT("hanna");
+static Str const ADMIN_PASSWORD = STR_INIT("koti");
 
 // Small helpers.
 
@@ -189,15 +204,47 @@ static Str mime_for(Str path) {
 
 // Response building.
 
+static Str const JSON_TYPE = STR_INIT("application/json; charset=utf-8");
+static Str const NO_STORE = STR_INIT("Cache-Control: no-store\r\n");
+
+static Str status_reason(int status) {
+    switch (status) {
+    case 200:
+        return STR("OK");
+    case 201:
+        return STR("Created");
+    case 400:
+        return STR("Bad Request");
+    case 401:
+        return STR("Unauthorized");
+    case 404:
+        return STR("Not Found");
+    case 405:
+        return STR("Method Not Allowed");
+    case 411:
+        return STR("Length Required");
+    case 413:
+        return STR("Content Too Large");
+    case 431:
+        return STR("Request Header Fields Too Large");
+    case 503:
+        return STR("Service Unavailable");
+    case 505:
+        return STR("HTTP Version Not Supported");
+    default:
+        return STR("Internal Server Error");
+    }
+}
+
 /**
  * Appends a status line and the common headers, up to and including the blank line.
  */
-static void write_head(Str_Builder *b, Conn const *c, int status, Str reason, Str ctype,
+static void write_head(Str_Builder *b, Conn const *c, int status, Str ctype,
                        uint64_t content_length, Str extra_headers) {
     str_builder_append(b, STR("HTTP/1.1 "));
     str_builder_append_u64(b, (uint64_t)status);
     str_builder_append(b, STR(" "));
-    str_builder_append(b, reason);
+    str_builder_append(b, status_reason(status));
     str_builder_append(b, STR("\r\nServer: kasin\r\nContent-Type: "));
     str_builder_append(b, ctype);
     str_builder_append(b, STR("\r\nContent-Length: "));
@@ -209,11 +256,11 @@ static void write_head(Str_Builder *b, Conn const *c, int status, Str reason, St
     str_builder_append(b, STR("\r\n"));
 }
 
-static void respond_simple(Conn *c, int status, Str reason, Str ctype, Str body,
-                           bool head_only, Str extra_headers) {
+static void respond_simple(Conn *c, int status, Str ctype, Str body, bool head_only,
+                           Str extra_headers) {
     Str_Builder b;
     str_builder_init(&b, (char *)c->resp, RESP_BUF_SIZE);
-    write_head(&b, c, status, reason, ctype, body.len, extra_headers);
+    write_head(&b, c, status, ctype, body.len, extra_headers);
     if (!head_only) {
         str_builder_append(&b, body);
     }
@@ -222,39 +269,80 @@ static void respond_simple(Conn *c, int status, Str reason, Str ctype, Str body,
 }
 
 static void respond_error(Conn *c, int status, bool head_only) {
-    Str reason;
-    Str extra = STR("");
-    switch (status) {
-    case 400:
-        reason = STR("Bad Request");
-        break;
-    case 404:
-        reason = STR("Not Found");
-        break;
-    case 405:
-        reason = STR("Method Not Allowed");
-        extra = STR("Allow: GET, HEAD\r\n");
-        break;
-    case 431:
-        reason = STR("Request Header Fields Too Large");
-        break;
-    case 505:
-        reason = STR("HTTP Version Not Supported");
-        break;
-    default:
-        status = 500;
-        reason = STR("Internal Server Error");
-        break;
-    }
     char body_buf[96];
     Str_Builder body;
     str_builder_init(&body, body_buf, sizeof body_buf);
     str_builder_append_u64(&body, (uint64_t)status);
     str_builder_append(&body, STR(" "));
-    str_builder_append(&body, reason);
+    str_builder_append(&body, status_reason(status));
     str_builder_append(&body, STR("\n"));
-    respond_simple(c, status, reason, STR("text/plain; charset=utf-8"),
-                   str_builder_str(&body), head_only, extra);
+    Str extra = status == 405 ? STR("Allow: GET, HEAD\r\n") : STR("");
+    respond_simple(c, status, STR("text/plain; charset=utf-8"), str_builder_str(&body),
+                   head_only, extra);
+}
+
+/**
+ * Starts a response body that is built in place in the response buffer,
+ * behind HEAD_RESERVE bytes kept free for the head. Finish with respond_built().
+ */
+static void body_begin(Conn *c, Str_Builder *body) {
+    str_builder_init(body, (char *)c->resp + HEAD_RESERVE, RESP_BUF_SIZE - HEAD_RESERVE);
+}
+
+/**
+ * Writes the head right in front of a body started with body_begin(), so the
+ * response is one contiguous span and Content-Length is exact.
+ */
+static void respond_built(Conn *c, int status, Str ctype, Str_Builder const *body,
+                          bool head_only, Str extra_headers) {
+    if (body->overflow) {
+        respond_error(c, 500, head_only);
+        return;
+    }
+    char head_buf[HEAD_RESERVE];
+    Str_Builder head;
+    str_builder_init(&head, head_buf, sizeof head_buf);
+    write_head(&head, c, status, ctype, body->len, extra_headers);
+    if (head.overflow) {
+        respond_error(c, 500, head_only);
+        return;
+    }
+    c->resp_pos = HEAD_RESERVE - (uint32_t)head.len;
+    memcpy(c->resp + c->resp_pos, head.data, head.len);
+    c->resp_end = HEAD_RESERVE + (head_only ? 0 : (uint32_t)body->len);
+}
+
+/**
+ * Responds with {"error": message}. The message must not need JSON escaping.
+ */
+static void respond_json_error(Conn *c, int status, Str message, Str extra_headers) {
+    Str_Builder body;
+    body_begin(c, &body);
+    str_builder_append(&body, STR("{\"error\":\""));
+    str_builder_append(&body, message);
+    str_builder_append(&body, STR("\"}"));
+    respond_built(c, status, JSON_TYPE, &body, false, extra_headers);
+}
+
+static void respond_db_error(Conn *c, Db_Status status) {
+    switch (status) {
+    case DB_NOT_FOUND:
+        respond_json_error(c, 404, STR("recipe not found"), NO_STORE);
+        break;
+    case DB_INVALID:
+        respond_json_error(c, 400, STR("invalid request body"), NO_STORE);
+        break;
+    case DB_BUSY:
+        respond_json_error(c, 503, STR("database busy"),
+                           STR("Cache-Control: no-store\r\nRetry-After: 1\r\n"));
+        break;
+    case DB_TOO_LARGE:
+        respond_json_error(c, 500, STR("response too large"), NO_STORE);
+        break;
+    default:
+        respond_json_error(c, 500, STR("database error"), NO_STORE);
+        break;
+    }
 }
 
 static Str const WELCOME = STR_INIT(
@@ -262,40 +350,77 @@ static Str const WELCOME = STR_INIT(
     "<h1>kasin-httpd is running</h1><p>Put files in the served directory.</p>\n");
 
 /**
+ * Opens a path under the docroot and stats it.
+ *
+ * @return The descriptor, or -1 with errno set.
+ */
+static int open_in_root(Str rel_path, struct stat *st) {
+    char rel_path_z[MAX_PATH_LEN];  // openat() needs a NUL-terminated path.
+    if (ROOT_FD < 0) {
+        errno = ENOENT;
+        return -1;
+    }
+    if (!str_to_cstr(rel_path, rel_path_z, sizeof rel_path_z)) {
+        errno = ENAMETOOLONG;
+        return -1;
+    }
+    int fd = openat(ROOT_FD, rel_path_z, O_RDONLY | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK);
+    if (fd < 0) {
+        return -1;
+    }
+    if (fstat(fd, st) < 0) {
+        int saved = errno;
+        close(fd);
+        errno = saved;
+        return -1;
+    }
+    return fd;
+}
+
+/**
  * Writes the response header into resp and keeps the file open so its body can
  * be streamed with sendfile(), whatever its size.
+ *
+ * Clean URLs are supported: a directory serves its index.html, and a missing
+ * path without an extension falls back to the same path plus ".html".
  */
 static void serve_file(Conn *c, Str rel_path, bool head_only, bool is_root) {
-    char rel_path_z[MAX_PATH_LEN];  // openat() needs a NUL-terminated path.
-    if (!str_to_cstr(rel_path, rel_path_z, sizeof rel_path_z)) {
-        respond_error(c, 404, head_only);
-        return;
+    char path_buf[MAX_PATH_LEN];
+    Str_Builder path;
+    str_builder_init(&path, path_buf, sizeof path_buf);
+    str_builder_append(&path, rel_path);
+
+    struct stat st;
+    int fd = open_in_root(str_builder_str(&path), &st);
+    size_t slash = str_rfind_char(rel_path, '/');
+    Str last_segment = slash == STR_NPOS ? rel_path : str_slice(rel_path, slash + 1, rel_path.len);
+    if (fd >= 0 && S_ISDIR(st.st_mode)) {
+        close(fd);
+        str_builder_append(&path, STR("/index.html"));
+        fd = open_in_root(str_builder_str(&path), &st);
+    } else if (fd < 0 && errno == ENOENT && str_find_char(last_segment, '.') == STR_NPOS) {
+        str_builder_append(&path, STR(".html"));
+        fd = open_in_root(str_builder_str(&path), &st);
     }
 
-    int fd = -1;
-    if (ROOT_FD >= 0) {
-        fd = openat(ROOT_FD, rel_path_z, O_RDONLY | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK);
-    }
     if (fd < 0) {
         if (is_root) {  // No index.html yet: show a built-in page.
-            respond_simple(c, 200, STR("OK"), STR("text/html; charset=utf-8"),
-                           WELCOME, head_only, STR(""));
+            respond_simple(c, 200, STR("text/html; charset=utf-8"), WELCOME, head_only, STR(""));
         } else {
-            bool not_found = ROOT_FD < 0 || errno == ENOENT || errno == ENOTDIR;
+            bool not_found = path.overflow || errno == ENOENT || errno == ENOTDIR;
             respond_error(c, not_found ? 404 : 500, head_only);
         }
         return;
     }
-
-    struct stat st;
-    if (fstat(fd, &st) < 0 || !S_ISREG(st.st_mode)) {
+    if (!S_ISREG(st.st_mode)) {
         close(fd);
         respond_error(c, 404, head_only);
         return;
     }
+
     Str_Builder hdr;
     str_builder_init(&hdr, (char *)c->resp, RESP_BUF_SIZE);
-    write_head(&hdr, c, 200, STR("OK"), mime_for(rel_path), (uint64_t)st.st_size, STR(""));
+    write_head(&hdr, c, 200, mime_for(str_builder_str(&path)), (uint64_t)st.st_size, STR(""));
     if (hdr.overflow) {
         close(fd);
         respond_error(c, 500, head_only);
@@ -313,19 +438,30 @@ static void serve_file(Conn *c, Str rel_path, bool head_only, bool is_root) {
     c->file_end = st.st_size;
 }
 
-// Request parsing / routing.
+// Request parsing.
 
 typedef struct {
-    bool close;
-    bool keepalive;
-    bool has_body;
-} Header_Flags;
+    bool     close;
+    bool     keepalive;
+    bool     chunked;
+    bool     bad_content_length;
+    uint64_t content_length;
+    Str      authorization;
+} Request_Headers;
+
+typedef struct {
+    Str                    method;
+    Str                    path;  /**< Target without query string or fragment. */
+    Str                    body;
+    bool                   head_only;
+    Request_Headers const *headers;
+} Request;
 
 /**
  * Scans header lines (CRLF separated, without the final blank line) for the
- * few headers that affect connection handling.
+ * headers the server acts on.
  */
-static void scan_headers(Str headers, Header_Flags *f) {
+static void scan_headers(Str headers, Request_Headers *h) {
     Str rest = headers;
     while (rest.len > 0) {
         Str line;
@@ -341,25 +477,236 @@ static void scan_headers(Str headers, Header_Flags *f) {
         value = str_trim(value);
         if (str_eq_nocase(name, STR("connection"))) {
             if (str_contains_nocase(value, STR("close"))) {
-                f->close = true;
+                h->close = true;
             } else if (str_contains_nocase(value, STR("keep-alive"))) {
-                f->keepalive = true;
+                h->keepalive = true;
             }
         } else if (str_eq_nocase(name, STR("content-length"))) {
-            uint64_t n;
-            if (!str_to_u64(value, &n) || n > 0) {  // Unparsable counts as a body.
-                f->has_body = true;
+            if (!str_to_u64(value, &h->content_length)) {
+                h->bad_content_length = true;
             }
         } else if (str_eq_nocase(name, STR("transfer-encoding"))) {
-            f->has_body = true;
+            h->chunked = true;  // Any transfer coding: the body length is unknown.
+        } else if (str_eq_nocase(name, STR("authorization"))) {
+            h->authorization = value;
         }
     }
 }
 
+// API.
+
+static int64_t unix_now(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_REALTIME, &ts);
+    return ts.tv_sec;
+}
+
+static bool authenticate(Request const *r, Jwt_Claims *claims) {
+    Str auth = r->headers->authorization;
+    Str scheme = STR("Bearer ");
+    if (auth.len <= scheme.len || !str_eq_nocase(str_slice(auth, 0, scheme.len), scheme)) {
+        return false;
+    }
+    Str token = str_trim(str_slice(auth, scheme.len, auth.len));
+    return jwt_verify(token, JWT_KEY, sizeof JWT_KEY, unix_now(), claims);
+}
+
+static void respond_unauthorized(Conn *c) {
+    respond_json_error(c, 401, STR("login required"),
+                       STR("Cache-Control: no-store\r\nWWW-Authenticate: Bearer\r\n"));
+}
+
+static void api_login(Worker *w, Conn *c, Request const *r) {
+    char username_buf[128];
+    char password_buf[128];
+    Str_Builder username;
+    Str_Builder password;
+    str_builder_init(&username, username_buf, sizeof username_buf);
+    str_builder_init(&password, password_buf, sizeof password_buf);
+
+    Db_Status status = db_parse_login(&w->db, r->body, &username, &password);
+    if (status != DB_OK) {
+        respond_db_error(c, status);
+        return;
+    }
+    // Compare both fields every time so timing does not reveal which was wrong.
+    bool user_ok = str_eq_constant_time(str_builder_str(&username), ADMIN_USERNAME);
+    bool password_ok = str_eq_constant_time(str_builder_str(&password), ADMIN_PASSWORD);
+    if (!(user_ok & password_ok)) {
+        respond_json_error(c, 401, STR("invalid username or password"),
+                           STR("Cache-Control: no-store\r\nWWW-Authenticate: Bearer\r\n"));
+        return;
+    }
+
+    int64_t now = unix_now();
+    int64_t expires_at = now + TOKEN_LIFETIME_SEC;
+    Str_Builder body;
+    body_begin(c, &body);
+    str_builder_append(&body, STR("{\"token\":\""));
+    if (!jwt_issue(&body, ADMIN_USERNAME, now, expires_at, JWT_KEY, sizeof JWT_KEY)) {
+        respond_json_error(c, 500, STR("cannot issue token"), NO_STORE);
+        return;
+    }
+    str_builder_append(&body, STR("\",\"expires_at\":"));
+    str_builder_append_u64(&body, (uint64_t)expires_at);
+    str_builder_append(&body, STR("}"));
+    respond_built(c, 200, JSON_TYPE, &body, false, NO_STORE);
+}
+
+static void api_session(Conn *c, Request const *r) {
+    Jwt_Claims claims;
+    if (!authenticate(r, &claims)) {
+        respond_unauthorized(c);
+        return;
+    }
+    Str_Builder body;
+    body_begin(c, &body);
+    str_builder_append(&body, STR("{\"username\":\""));
+    str_builder_append(&body, str_make(claims.subject, claims.subject_len));
+    str_builder_append(&body, STR("\",\"expires_at\":"));
+    str_builder_append_u64(&body, (uint64_t)claims.expires_at);
+    str_builder_append(&body, STR("}"));
+    respond_built(c, 200, JSON_TYPE, &body, r->head_only, NO_STORE);
+}
+
+static void api_list_recipes(Worker *w, Conn *c, Request const *r) {
+    Str_Builder body;
+    body_begin(c, &body);
+    Db_Status status = db_list_recipes_json(&w->db, &body);
+    if (status != DB_OK) {
+        respond_db_error(c, status);
+        return;
+    }
+    respond_built(c, 200, JSON_TYPE, &body, r->head_only, NO_STORE);
+}
+
+static void api_get_recipe(Worker *w, Conn *c, Request const *r, int64_t id) {
+    Str_Builder body;
+    body_begin(c, &body);
+    Db_Status status = db_get_recipe_json(&w->db, id, &body);
+    if (status != DB_OK) {
+        respond_db_error(c, status);
+        return;
+    }
+    respond_built(c, 200, JSON_TYPE, &body, r->head_only, NO_STORE);
+}
+
+static void respond_recipe_id(Conn *c, int status, int64_t id) {
+    Str_Builder body;
+    body_begin(c, &body);
+    str_builder_append(&body, STR("{\"id\":"));
+    str_builder_append_u64(&body, (uint64_t)id);
+    str_builder_append(&body, STR("}"));
+    respond_built(c, status, JSON_TYPE, &body, false, NO_STORE);
+}
+
+static void api_create_recipe(Worker *w, Conn *c, Request const *r) {
+    if (!authenticate(r, NULL)) {
+        respond_unauthorized(c);
+        return;
+    }
+    int64_t id;
+    Db_Status status = db_create_recipe(&w->db, r->body, &id);
+    if (status != DB_OK) {
+        respond_db_error(c, status);
+        return;
+    }
+    respond_recipe_id(c, 201, id);
+}
+
+static void api_update_recipe(Worker *w, Conn *c, Request const *r, int64_t id) {
+    if (!authenticate(r, NULL)) {
+        respond_unauthorized(c);
+        return;
+    }
+    Db_Status status = db_update_recipe(&w->db, id, r->body);
+    if (status != DB_OK) {
+        respond_db_error(c, status);
+        return;
+    }
+    respond_recipe_id(c, 200, id);
+}
+
+static void api_delete_recipe(Worker *w, Conn *c, Request const *r, int64_t id) {
+    if (!authenticate(r, NULL)) {
+        respond_unauthorized(c);
+        return;
+    }
+    Db_Status status = db_delete_recipe(&w->db, id);
+    if (status != DB_OK) {
+        respond_db_error(c, status);
+        return;
+    }
+    respond_recipe_id(c, 200, id);
+}
+
 /**
- * Returns 1 and fills c->resp if a full request head is buffered, else 0.
+ * Routes requests under /api/.
+ *
+ *   POST /api/login          {username, password} -> {token, expires_at}
+ *   GET  /api/session        (auth) -> {username, expires_at}
+ *   GET  /api/recipes        -> [{id, name, image, description}, ...]
+ *   POST /api/recipes        (auth) {name, image, description} -> 201 {id}
+ *   GET  /api/recipes/{id}   -> {id, name, image, description}
+ *   PUT  /api/recipes/{id}   (auth) {name, image, description} -> {id}
+ *   DELETE /api/recipes/{id} (auth) -> {id}
  */
-static int build_response(Conn *c) {
+static void handle_api(Worker *w, Conn *c, Request const *r) {
+    bool is_get = str_eq(r->method, STR("GET")) || r->head_only;
+    bool is_post = str_eq(r->method, STR("POST"));
+    bool is_put = str_eq(r->method, STR("PUT"));
+    bool is_delete = str_eq(r->method, STR("DELETE"));
+    Str recipe_prefix = STR("/api/recipes/");
+
+    if (str_eq(r->path, STR("/api/login"))) {
+        if (is_post) {
+            api_login(w, c, r);
+        } else {
+            respond_json_error(c, 405, STR("method not allowed"),
+                               STR("Cache-Control: no-store\r\nAllow: POST\r\n"));
+        }
+    } else if (str_eq(r->path, STR("/api/session"))) {
+        if (is_get) {
+            api_session(c, r);
+        } else {
+            respond_json_error(c, 405, STR("method not allowed"),
+                               STR("Cache-Control: no-store\r\nAllow: GET, HEAD\r\n"));
+        }
+    } else if (str_eq(r->path, STR("/api/recipes"))) {
+        if (is_get) {
+            api_list_recipes(w, c, r);
+        } else if (is_post) {
+            api_create_recipe(w, c, r);
+        } else {
+            respond_json_error(c, 405, STR("method not allowed"),
+                               STR("Cache-Control: no-store\r\nAllow: GET, HEAD, POST\r\n"));
+        }
+    } else if (str_starts_with(r->path, recipe_prefix)) {
+        uint64_t id;
+        Str id_text = str_slice(r->path, recipe_prefix.len, r->path.len);
+        if (!str_to_u64(id_text, &id) || id == 0 || id > INT64_MAX) {
+            respond_db_error(c, DB_NOT_FOUND);
+        } else if (is_get) {
+            api_get_recipe(w, c, r, (int64_t)id);
+        } else if (is_put) {
+            api_update_recipe(w, c, r, (int64_t)id);
+        } else if (is_delete) {
+            api_delete_recipe(w, c, r, (int64_t)id);
+        } else {
+            respond_json_error(c, 405, STR("method not allowed"),
+                               STR("Cache-Control: no-store\r\nAllow: GET, HEAD, PUT, DELETE\r\n"));
+        }
+    } else {
+        respond_json_error(c, 404, STR("no such endpoint"), NO_STORE);
+    }
+}
+
+// Routing.
+
+/**
+ * Returns 1 and fills c->resp if a full request (head and body) is buffered, else 0.
+ */
+static int build_response(Worker *w, Conn *c) {
     Str buffered = str_make((char const *)c->req, c->req_len);
     Str head;
     Str after_head;
@@ -367,6 +714,7 @@ static int build_response(Conn *c) {
         return 0;
     }
     size_t head_len = buffered.len - after_head.len;
+    size_t consumed = head_len;
 
     c->keepalive = 0;  // Errors below close.
 
@@ -391,43 +739,74 @@ static int build_response(Conn *c) {
         goto done;
     }
 
-    Header_Flags f = {
+    Request_Headers h = {
         .close = false,
         .keepalive = false,
-        .has_body = false,
+        .chunked = false,
+        .bad_content_length = false,
+        .content_length = 0,
+        .authorization = STR(""),
     };
-    scan_headers(headers, &f);
-    c->keepalive = (http11 ? !f.close : f.keepalive) && !f.has_body;
+    scan_headers(headers, &h);
+    if (h.bad_content_length) {
+        respond_error(c, 400, false);
+        goto done;
+    }
+    if (h.chunked) {
+        respond_error(c, 411, false);
+        goto done;
+    }
+    if (h.content_length > REQ_BUF_SIZE - head_len) {  // The body can never fit.
+        respond_error(c, 413, false);
+        goto done;
+    }
+    size_t request_len = head_len + (size_t)h.content_length;
+    if (buffered.len < request_len) {
+        return 0;  // Wait for the rest of the body.
+    }
+    consumed = request_len;
+    c->keepalive = http11 ? !h.close : h.keepalive;
 
-    bool is_get = str_eq(method, STR("GET"));
-    bool is_head = str_eq(method, STR("HEAD"));
-    if (!is_get && !is_head) {
-        c->keepalive = 0;
+    Request r = {
+        .method = method,
+        .path = target,
+        .body = str_slice(buffered, head_len, request_len),
+        .head_only = str_eq(method, STR("HEAD")),
+        .headers = &h,
+    };
+
+    // Strip query string / fragment.
+    size_t query = str_find_any(r.path, STR("?#"));
+    if (query != STR_NPOS) {
+        r.path = str_slice(r.path, 0, query);
+    }
+
+    /*
+     * No percent-decoding: reject anything that could escape the root.
+     * The set below is length-based, so it includes the NUL byte too.
+     */
+    if (r.path.len == 0 || r.path.data[0] != '/' || r.path.len >= MAX_PATH_LEN - 16 ||
+        str_find_any(r.path, STR("%\\\0")) != STR_NPOS || str_contains(r.path, STR(".."))) {
+        respond_error(c, 400, r.head_only);
+        goto done;
+    }
+
+    if (str_starts_with(r.path, STR("/api/"))) {
+        handle_api(w, c, &r);
+        goto done;
+    }
+
+    if (!str_eq(method, STR("GET")) && !r.head_only) {
         respond_error(c, 405, false);
         goto done;
     }
 
-    // Strip query string / fragment.
-    size_t query = str_find_any(target, STR("?#"));
-    if (query != STR_NPOS) {
-        target = str_slice(target, 0, query);
-    }
-
-    // No percent-decoding: reject anything that could escape the root.
-    // The set below is length-based, so it includes the NUL byte too.
-    if (target.len == 0 || target.data[0] != '/' || target.len >= MAX_PATH_LEN - 16 ||
-        str_find_any(target, STR("%\\\0")) != STR_NPOS || str_contains(target, STR(".."))) {
-        respond_error(c, 400, is_head);
+    if (str_eq(r.path, STR("/health"))) {
+        respond_simple(c, 200, STR("text/plain; charset=utf-8"), STR("ok\n"), r.head_only, STR(""));
         goto done;
     }
 
-    if (str_eq(target, STR("/health"))) {
-        respond_simple(c, 200, STR("OK"), STR("text/plain; charset=utf-8"), STR("ok\n"),
-                       is_head, STR(""));
-        goto done;
-    }
-
-    Str rel = str_slice(target, 1, target.len);  // Drop leading '/'.
+    Str rel = str_slice(r.path, 1, r.path.len);  // Drop leading '/'.
     char path_buf[MAX_PATH_LEN];
     Str_Builder path;
     str_builder_init(&path, path_buf, sizeof path_buf);
@@ -436,12 +815,12 @@ static int build_response(Conn *c) {
         str_builder_append(&path, STR("index.html"));
     }
 
-    serve_file(c, str_builder_str(&path), is_head, rel.len == 0);
+    serve_file(c, str_builder_str(&path), r.head_only, rel.len == 0);
 
 done:
-    // The request head is fully handled; keep any pipelined bytes behind it.
-    c->req_len -= (uint32_t)head_len;
-    memmove(c->req, c->req + head_len, c->req_len);
+    // The request is fully handled; keep any pipelined bytes behind it.
+    c->req_len -= (uint32_t)consumed;
+    memmove(c->req, c->req + consumed, c->req_len);
     return 1;
 }
 
@@ -476,7 +855,7 @@ static void conn_close(Worker *w, Conn *c) {
 static void conn_advance(Worker *w, Conn *c) {
     for (;;) {
         if (c->state == ST_READING) {
-            if (!build_response(c)) {
+            if (!build_response(w, c)) {
                 if (c->req_len >= REQ_BUF_SIZE) {  // Headers too large.
                     c->keepalive = 0;
                     c->req_len = 0;
@@ -683,9 +1062,10 @@ int main(int argc, char **argv) {
     long nworkers = sysconf(_SC_NPROCESSORS_ONLN);
     
     char const *root = NULL;
+    char const *db_path = "kotoa.db";
     int opt;
     // CHECK What does getopt do?
-    while ((opt = getopt(argc, argv, "p:t:r:h")) != -1) {
+    while ((opt = getopt(argc, argv, "p:t:r:d:h")) != -1) {
         uint64_t value;
         switch (opt) {
         case 'p':
@@ -704,6 +1084,9 @@ int main(int argc, char **argv) {
             break;
         case 'r':
             root = optarg;
+            break;
+        case 'd':
+            db_path = optarg;
             break;
         default:
             usage(argv[0]);
@@ -734,7 +1117,8 @@ int main(int argc, char **argv) {
                       + sizeof (Conn) * MAX_CONNS_PER_WORKER
                       + (size_t)MAX_CONNS_PER_WORKER * REQ_BUF_SIZE
                       + (size_t)MAX_CONNS_PER_WORKER * RESP_BUF_SIZE;
-    size_t total = arena_align_up(per_worker * (size_t)nworkers + CACHE_LINE * 4, 4096);
+    size_t total = arena_align_up(per_worker * (size_t)nworkers + DB_HEAP_SIZE + CACHE_LINE * 8,
+                                  4096);
 
     void *mem = mmap(NULL, total, PROT_READ | PROT_WRITE,
                      MAP_PRIVATE | MAP_ANONYMOUS | MAP_POPULATE, -1, 0);
@@ -746,6 +1130,29 @@ int main(int argc, char **argv) {
 
     Arena arena;
     arena_init(&arena, mem, total);
+
+    // Session tokens survive restarts only when the secret is configured.
+    char const *jwt_secret = getenv("KASIN_JWT_SECRET");
+    if (jwt_secret && jwt_secret[0] != '\0') {
+        Str secret = str_from_cstr(jwt_secret);
+        Sha256 key_hash;
+        sha256_init(&key_hash);
+        sha256_update(&key_hash, secret.data, secret.len);
+        sha256_final(&key_hash, JWT_KEY);
+    } else if (getrandom(JWT_KEY, sizeof JWT_KEY, 0) != (ssize_t)sizeof JWT_KEY) {
+        perror("getrandom");
+        return EX_OSERR;
+    }
+
+    // SQLite gets a fixed heap out of the same reservation.
+    void *db_heap = arena_alloc(&arena, DB_HEAP_SIZE, CACHE_LINE);
+    if (!db_heap) {
+        fputs("arena exhausted\n", stderr);
+        return EX_SOFTWARE;
+    }
+    if (!db_global_init(db_heap, DB_HEAP_SIZE) || !db_prepare_file(db_path)) {
+        return EX_SOFTWARE;
+    }
 
     Worker *workers[MAX_WORKERS];
     for (long i = 0; i < nworkers; i++) {
@@ -792,6 +1199,9 @@ int main(int argc, char **argv) {
             perror("epoll_ctl");
             return EX_OSERR;
         }
+        if (!db_open(&w->db, db_path)) {
+            return EX_SOFTWARE;
+        }
         workers[i] = w;
     }
 
@@ -805,11 +1215,13 @@ int main(int argc, char **argv) {
     signal(SIGPIPE, SIG_IGN);
 
     printf("kasin-httpd: port %d, %ld workers, %d conns/worker, req %d B, resp %d B, "
-           "reserved %.1f MiB, docroot %s\n",
+           "reserved %.1f MiB (SQLite heap %d MiB), docroot %s, database %s\n",
            port, nworkers, MAX_CONNS_PER_WORKER, REQ_BUF_SIZE, RESP_BUF_SIZE,
-           (double)total / (1024.0 * 1024.0), root ? root : "(none)");
+           (double)total / (1024.0 * 1024.0), DB_HEAP_SIZE / (1024 * 1024),
+           root ? root : "(none)", db_path);
     fflush(stdout);
 
+    long const worker_count = nworkers;
     for (long i = 1; i < nworkers; i++) {
         if (pthread_create(&workers[i]->thread, NULL, worker_main, workers[i]) != 0) {
             perror("pthread_create");
@@ -823,6 +1235,9 @@ int main(int argc, char **argv) {
 
     for (long i = 1; i < nworkers; i++) {
         pthread_join(workers[i]->thread, NULL);
+    }
+    for (long i = 0; i < worker_count; i++) {
+        db_close(&workers[i]->db);
     }
     puts("kasin-httpd: shut down");
     return EXIT_SUCCESS;

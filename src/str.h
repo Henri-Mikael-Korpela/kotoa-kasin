@@ -101,6 +101,21 @@ bool str_eq(Str a, Str b);
 bool str_eq_nocase(Str a, Str b);
 
 /**
+ * Checks whether s starts with prefix.
+ *
+ * @return True when the first bytes of s equal prefix.
+ */
+bool str_starts_with(Str s, Str prefix);
+
+/**
+ * Compares two strings in time that depends only on their lengths, not on
+ * where they differ. Use for secrets.
+ *
+ * @return True when both are equal.
+ */
+bool str_eq_constant_time(Str a, Str b);
+
+/**
  * Checks whether s ends with suffix.
  *
  * @return True when the last bytes of s equal suffix.

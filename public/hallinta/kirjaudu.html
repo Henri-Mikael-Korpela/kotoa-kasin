@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="fi">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="robots" content="noindex">
+  <title>Kirjaudu &mdash; Kotoa käsin</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=Work+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/css/style.css">
+  <link rel="stylesheet" href="/css/admin.css">
+</head>
+<body data-page="login">
+
+  <header class="site-header admin-header">
+    <div class="nav-container">
+      <a href="/" class="logo">Kotoa käsin<span class="logo-badge">Hallinta</span></a>
+      <nav class="admin-nav">
+        <a href="/">&larr; Takaisin sivustolle</a>
+      </nav>
+    </div>
+  </header>
+
+  <main class="admin-main">
+    <div class="container">
+      <section class="admin-card login-card">
+        <h1>Kirjaudu sisään</h1>
+        <p class="admin-lead">Reseptien hallinta on vain ylläpitäjille.</p>
+
+        <form id="loginForm" novalidate>
+          <div class="form-field">
+            <label for="username">Käyttäjätunnus</label>
+            <input id="username" name="username" type="text" autocomplete="username" autocapitalize="none" spellcheck="false" required autofocus>
+          </div>
+          <div class="form-field">
+            <label for="password">Salasana</label>
+            <input id="password" name="password" type="password" autocomplete="current-password" required>
+          </div>
+          <p class="form-error" id="loginError" role="alert"></p>
+          <button type="submit" class="btn btn-primary">Kirjaudu</button>
+        </form>
+      </section>
+    </div>
+  </main>
+
+  <script src="/js/admin.js"></script>
+</body>
+</html>

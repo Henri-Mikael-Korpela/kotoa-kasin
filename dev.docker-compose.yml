@@ -1,6 +1,7 @@
 # Run with:  docker compose -f dev.docker-compose.yml up --build
 # Then open http://localhost:8080  (Docker Desktop on Windows, WSL2 backend).
 # Re-run `docker compose -f dev.docker-compose.yml restart` to rebuild after edits.
+# The recipe database lives in the db-data volume and survives restarts.
 services:
   httpd:
     build:
@@ -12,11 +13,13 @@ services:
     volumes:
       - .:/app
       - build-cache:/build        # keep build output off the Windows bind mount
+      - db-data:/data            # SQLite needs real file locking; keep it off the bind mount too
     working_dir: /app
     command: >
       sh -c "cmake -S /app -B /build -DCMAKE_BUILD_TYPE=Release &&
              cmake --build /build -j &&
-             exec /build/kasin-httpd -p 8080 -r /app/public"
+             exec /build/kasin-httpd -p 8080 -r /app/public -d /data/kotoa.db"
 
 volumes:
   build-cache:
+  db-data:

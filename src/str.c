@@ -61,6 +61,21 @@ bool str_eq_nocase(Str a, Str b) {
     return true;
 }
 
+bool str_starts_with(Str s, Str prefix) {
+    return s.len >= prefix.len && str_eq(str_slice(s, 0, prefix.len), prefix);
+}
+
+bool str_eq_constant_time(Str a, Str b) {
+    if (a.len != b.len) {
+        return false;
+    }
+    unsigned char diff = 0;
+    for (size_t i = 0; i < a.len; i++) {
+        diff |= (unsigned char)(a.data[i] ^ b.data[i]);
+    }
+    return diff == 0;
+}
+
 bool str_ends_with(Str s, Str suffix) {
     return s.len >= suffix.len && str_eq(str_slice(s, s.len - suffix.len, s.len), suffix);
 }

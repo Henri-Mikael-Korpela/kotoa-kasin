@@ -32,4 +32,70 @@ document.addEventListener('DOMContentLoaded', function () {
   if (yearEl) {
     yearEl.textContent = new Date().getFullYear();
   }
+
+  var recipeGrid = document.getElementById('recipeGrid');
+  if (recipeGrid) {
+    loadRecipes(recipeGrid);
+  }
 });
+
+function showRecipeStatus(grid, message) {
+  var status = document.createElement('p');
+  status.className = 'recipe-grid-status';
+  status.textContent = message;
+  grid.replaceChildren(status);
+}
+
+function createRecipeCard(recipe) {
+  var card = document.createElement('article');
+  card.className = 'recipe-card';
+
+  var thumb = document.createElement('a');
+  thumb.href = '#';
+  thumb.className = 'recipe-thumb';
+  thumb.setAttribute('data-emoji', '🌿');
+  if (recipe.image) {
+    var img = document.createElement('img');
+    img.src = recipe.image;
+    img.alt = recipe.name;
+    img.loading = 'lazy';
+    img.addEventListener('error', function () {
+      img.remove();
+    });
+    thumb.appendChild(img);
+  }
+
+  var info = document.createElement('div');
+  info.className = 'recipe-info';
+  var title = document.createElement('h3');
+  var titleLink = document.createElement('a');
+  titleLink.href = '#';
+  titleLink.textContent = recipe.name;
+  title.appendChild(titleLink);
+  var description = document.createElement('p');
+  description.textContent = recipe.description;
+  info.append(title, description);
+
+  card.append(thumb, info);
+  return card;
+}
+
+function loadRecipes(grid) {
+  fetch('/api/recipes', { headers: { 'Accept': 'application/json' } })
+    .then(function (response) {
+      if (!response.ok) {
+        throw new Error('HTTP ' + response.status);
+      }
+      return response.json();
+    })
+    .then(function (recipes) {
+      if (recipes.length === 0) {
+        showRecipeStatus(grid, 'Reseptejä ei ole vielä julkaistu.');
+        return;
+      }
+      grid.replaceChildren.apply(grid, recipes.map(createRecipeCard));
+    })
+    .catch(function () {
+      showRecipeStatus(grid, 'Reseptien lataaminen epäonnistui. Yritä hetken kuluttua uudelleen.');
+    });
+}
