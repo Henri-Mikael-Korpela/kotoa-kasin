@@ -265,7 +265,7 @@ Teksti kuvan oikealla puolella.
 - An unused layout column is `<!-- block:empty /-->`.
 - Text outside any marker (descriptions written before the editor) reads as
   paragraphs, split at blank lines.
-- Parsing, writing and rendering live in `public/js/blocks.js`, shared by the
+- Parsing, writing and rendering live in `js/shared/blocks.js`, shared by the
   editor and the public recipe page. Unknown blocks are skipped, and text is
   always inserted as text, never as HTML.
 
@@ -306,13 +306,65 @@ runs. Only signed-in requests may borrow one, and the connection closes after
 such a request so the buffer is free again at once. When every buffer is busy,
 the server answers 503 and the browser can retry.
 
+## JavaScript bundles
+
+The JavaScript sources live in `js/`, outside the served directory. The browser
+gets two bundles built from them by `kasin-jsbundle`, a small C program built
+with the server:
+
+| Bundle | Pages | Sources |
+|---|---|---|
+| `/js/site.js` | The public site | `js/shared/blocks.js`, `js/site/main.js` |
+| `/js/admin.js` | The admin view (`/hallinta`) | `js/shared/blocks.js`, `js/admin/admin.js`, `gallery.js`, `editor.js` |
+
+`js/bundles.txt` lists the bundles and their sources in load order. The public
+and admin code are kept apart in three ways:
+
+- A bundle may only use files from `js/shared/` and from the directory named
+  after it, so admin code can never end up in the public bundle (or the other
+  way round); the tool refuses such a manifest.
+- Each bundle runs in its own function scope in strict mode: nothing it
+  declares becomes a global, so the two bundles cannot see or overwrite each
+  other's names.
+- All files of one bundle share that scope, so the tool refuses to build a
+  bundle in which two files declare the same top-level name.
+
+The bundles are minified: comments and whitespace are removed, keeping a space
+or line break only where the code needs one, and optional semicolons and
+trailing commas are dropped. Names are never changed. That makes the public
+bundle about 40 % smaller than its sources.
+
+Bundles are built automatically:
+
+- **Dev container:** a watcher (`kasin-jsbundle -w`) builds them at start and
+  again whenever you save a file in `js/` or change `js/bundles.txt`. Reload the
+  page to see the change; no restart is needed. A mistake such as an unclosed
+  string is reported in the container log (`docker compose -f
+  dev.docker-compose.yml logs -f httpd`) and the previous bundles stay in
+  place until the next successful build. The watcher polls file times, because
+  file-change events do not cross the Windows bind mount.
+- **Production image:** the `Dockerfile` builds them, after running the
+  minifier's tests (`tests/jsmin_test.c`).
+
+The bundles in `public/js/` are generated and not in version control (see
+`.gitignore`); edit the sources in `js/` instead. To build by hand, or without
+minifying for debugging:
+
+```sh
+kasin-jsbundle -o public/js js/bundles.txt      # minified
+kasin-jsbundle -n -o public/js js/bundles.txt   # sources as they are
+kasin-jsbundle -w -o public/js js/bundles.txt   # keep running, rebuild on change
+```
+
 ## Project layout
 
 | Path | Contents |
 |---|---|
-| `src/` | The server: `main.c` (HTTP, routing, API), `db.c` (SQLite), `migrate.c` (migration runner), `sql.c` (SQLite helpers), `jwt.c`, `sha256.c`, `str.c`, `arena.c`, `buddy.c` |
+| `src/` | The server: `main.c` (HTTP, routing, API), `db.c` (SQLite), `migrate.c` (migration runner), `sql.c` (SQLite helpers), `jwt.c`, `sha256.c`, `str.c`, `arena.c`, `buddy.c`. Also the bundler: `jsbundle.c` and `jsmin.c` (the minifier) |
+| `tests/` | `jsmin_test.c`, tests for the minifier (`ctest`) |
+| `js/` | JavaScript sources and `bundles.txt`: `shared/blocks.js` is the block format, `site/main.js` the public site, `admin/admin.js` the admin pages, `admin/editor.js` the editor, `admin/gallery.js` the image gallery |
 | `migrations/` | Database migrations, `<number>__<name>.sql` |
-| `public/` | The site: pages, `css/`, `js/`, `assets/`; `hallinta/` holds the admin pages. `js/blocks.js` is the block format, `js/editor.js` the editor, `js/gallery.js` the image gallery |
+| `public/` | The site: pages, `css/`, `assets/`, and the generated bundles in `js/`; `hallinta/` holds the admin pages |
 | `Dockerfile` | Production image (used for Azure) |
 | `Dockerfile.dev`, `dev.docker-compose.yml` | Local development and the deployment tooling container |
 | `deploy/` | `bin/deploy` (the deployment script) and `config.env` (its settings) |

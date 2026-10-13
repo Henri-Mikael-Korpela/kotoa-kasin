@@ -1,6 +1,8 @@
 # Run with:  docker compose -f dev.docker-compose.yml up --build
 # Then open http://localhost:8080  (Docker Desktop on Windows, WSL2 backend).
-# Re-run `docker compose -f dev.docker-compose.yml restart` to rebuild after edits.
+# Re-run `docker compose -f dev.docker-compose.yml restart` to rebuild C code after edits.
+# JavaScript in js/ needs no restart: a watcher rebuilds the bundles in public/js on
+# every save (see the container log); reload the page to pick the change up.
 # The recipe database lives in the db-data volume and survives restarts.
 # Deploy to Azure with:  docker exec -it kotoa-kasin-deploy deploy  (see README.md)
 services:
@@ -19,7 +21,8 @@ services:
     command: >
       sh -c "cmake -S /app -B /build -DCMAKE_BUILD_TYPE=Release &&
              cmake --build /build -j &&
-             exec /build/kasin-httpd -p 8080 -r /app/public -d /data/kotoa.db -m /app/migrations -u /data/uploads"
+             { /build/kasin-jsbundle -w -o /app/public/js /app/js/bundles.txt &
+               exec /build/kasin-httpd -p 8080 -r /app/public -d /data/kotoa.db -m /app/migrations -u /data/uploads; }"
 
   # Deployment tooling: the official Azure CLI image, idling until you run
   # `docker exec -it kotoa-kasin-deploy deploy`. The repo is mounted read-only;

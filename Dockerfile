@@ -7,14 +7,21 @@ RUN apk add --no-cache build-base cmake sqlite-dev
 WORKDIR /src
 COPY CMakeLists.txt ./
 COPY src ./src
+COPY tests ./tests
 RUN cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
- && cmake --build build -j
+ && cmake --build build -j \
+ && ctest --test-dir build --output-on-failure
+# The JavaScript bundles served from /js are built from js/ (see js/bundles.txt).
+COPY js ./js
+RUN mkdir bundles \
+ && build/kasin-jsbundle -o bundles js/bundles.txt
 
 FROM alpine:3.20
 RUN apk add --no-cache sqlite-libs \
  && mkdir /data
 COPY --from=build /src/build/kasin-httpd /usr/local/bin/kasin-httpd
 COPY public /srv/public
+COPY --from=build /src/bundles/ /srv/public/js/
 COPY migrations /srv/migrations
 EXPOSE 8080
 # Two workers fit the smallest Container Apps size (0.25 vCPU, 0.5 GiB) with room

@@ -1,0 +1,18 @@
+# JavaScript bundles, built by kasin-jsbundle into public/js/<name>.js.
+#
+# Each bundle lists its source files in load order. A bundle may use only files
+# in shared/ and in the directory named after it, so the public site's code and
+# the admin code never end up in the same file. Every bundle runs in its own
+# scope: nothing in one is visible to the other.
+
+# Public pages: /, /reseptit/<slug>, /meista, /yhteystiedot.
+site:
+    shared/blocks.js
+    site/main.js
+
+# Admin pages under /hallinta.
+admin:
+    shared/blocks.js
+    admin/admin.js
+    admin/gallery.js
+    admin/editor.js

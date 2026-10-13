@@ -41,3 +41,19 @@ target_compile_definitions(kasin-httpd PRIVATE
   BIG_BUFS_PER_WORKER=${KASIN_BIG_BUFS_PER_WORKER}
   DB_HEAP_SIZE=${KASIN_DB_HEAP_SIZE})
 target_link_libraries(kasin-httpd PRIVATE Threads::Threads SQLite::SQLite3)
+
+# Builds the JavaScript bundles in public/js from the sources in js/ (see js/bundles.txt).
+add_executable(kasin-jsbundle
+  src/jsbundle.c
+  src/jsmin.c
+  src/arena.c
+  src/str.c)
+target_compile_options(kasin-jsbundle PRIVATE -Wall -Wextra -Wpedantic)
+
+enable_testing()
+add_executable(jsmin-test
+  tests/jsmin_test.c
+  src/jsmin.c
+  src/str.c)
+target_compile_options(jsmin-test PRIVATE -Wall -Wextra -Wpedantic)
+add_test(NAME jsmin COMMAND jsmin-test)
