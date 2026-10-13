@@ -515,6 +515,7 @@ function initEditPage() {
       if (image) {
         fields.image.value = image.url;
         updatePreview();
+        scheduleLive();
       }
     });
   });
@@ -536,6 +537,119 @@ function initEditPage() {
     }
   }
 
+  // Live preview: the recipe as its public page will show it, updated on every
+  // change. Wide screens show it beside the form; narrow ones switch with tabs.
+  var live = {
+    layout: document.getElementById('editLayout'),
+    address: document.getElementById('previewAddress'),
+    category: document.getElementById('previewCategory'),
+    name: document.getElementById('previewName'),
+    cover: document.getElementById('previewCover'),
+    content: document.getElementById('previewContent'),
+    editTab: document.getElementById('editTab'),
+    previewTab: document.getElementById('previewTab'),
+    queued: false
+  };
+
+  function renderLiveCover() {
+    var src = KasinBlocks.safeSrc(fields.image.value.trim());
+    if (live.cover.dataset.src === src) {
+      return;
+    }
+    live.cover.dataset.src = src;
+    if (!src) {
+      live.cover.replaceChildren();
+      live.cover.hidden = true;
+      return;
+    }
+    var img = document.createElement('img');
+    img.src = src;
+    img.alt = '';
+    img.addEventListener('error', function () {
+      live.cover.hidden = true;
+    });
+    live.cover.replaceChildren(img);
+    live.cover.hidden = false;
+  }
+
+  function renderLiveContent() {
+    var blocks = KasinBlocks.parse(editor.serialize());
+    if (blocks.length === 0) {
+      var empty = document.createElement('p');
+      empty.className = 'preview-empty';
+      empty.textContent = 'Kuvaus näkyy tässä, kun lisäät lohkoja.';
+      live.content.replaceChildren(empty);
+      return;
+    }
+    // Images already shown are moved into the new content instead of being
+    // created again, so they do not flicker while text is typed.
+    var shown = {};
+    Array.prototype.forEach.call(live.content.querySelectorAll('img'), function (img) {
+      var src = img.getAttribute('src');
+      (shown[src] = shown[src] || []).push(img);
+    });
+    var fresh = document.createElement('div');
+    KasinBlocks.render(blocks, fresh);
+    Array.prototype.forEach.call(fresh.querySelectorAll('img'), function (img) {
+      var reusable = shown[img.getAttribute('src')];
+      if (reusable && reusable.length) {
+        var old = reusable.shift();
+        old.alt = img.alt;
+        img.replaceWith(old);
+      }
+    });
+    live.content.replaceChildren.apply(live.content, Array.prototype.slice.call(fresh.childNodes));
+  }
+
+  function renderLive() {
+    live.queued = false;
+    var option = fields.category.selectedOptions[0];
+    live.category.textContent = option && option.value ? option.textContent : 'Kategoria';
+    var name = fields.name.value.trim();
+    live.name.textContent = name || 'Reseptin nimi';
+    live.name.classList.toggle('is-placeholder', !name);
+    live.address.textContent = '/reseptit/' + (slugify(fields.slug.value) || '…');
+    renderLiveCover();
+    renderLiveContent();
+  }
+
+  // Several changes can arrive at once (a re-render, a pick); draw once after them.
+  function scheduleLive() {
+    if (!live.queued) {
+      live.queued = true;
+      Promise.resolve().then(renderLive);
+    }
+  }
+  form.addEventListener('input', scheduleLive);
+  form.addEventListener('change', scheduleLive);
+
+  function showView(view) {
+    live.layout.dataset.view = view;
+    [live.editTab, live.previewTab].forEach(function (tab) {
+      var selected = (tab === live.previewTab) === (view === 'preview');
+      tab.setAttribute('aria-selected', String(selected));
+      tab.tabIndex = selected ? 0 : -1;
+    });
+    if (view === 'preview') {
+      renderLive();
+    }
+  }
+  live.editTab.addEventListener('click', function () {
+    showView('edit');
+  });
+  live.previewTab.addEventListener('click', function () {
+    showView('preview');
+  });
+  [live.editTab, live.previewTab].forEach(function (tab) {
+    tab.addEventListener('keydown', function (event) {
+      if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
+        var next = tab === live.editTab ? live.previewTab : live.editTab;
+        next.focus();
+        next.click();
+      }
+    });
+  });
+
   if (id) {
     title.textContent = 'Muokkaa reseptiä';
     document.title = 'Muokkaa reseptiä — Kotoa käsin';
@@ -551,6 +665,7 @@ function initEditPage() {
     })
     .then(function (results) {
       fillCategories(results[0]);
+      scheduleLive();
       var recipe = results[1];
       if (recipe) {
         fields.name.value = recipe.name;
@@ -562,6 +677,7 @@ function initEditPage() {
         fields.image.value = recipe.image;
         editor = KasinEditor.create(document.getElementById('descriptionEditor'), recipe.description);
         updatePreview();
+        scheduleLive();
         form.hidden = false;
       }
       fields.name.focus();

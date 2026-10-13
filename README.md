@@ -224,6 +224,11 @@ Add blocks from the bar under the list, drag them by the ⠿ handle (mouse or
 touch) or move them with the arrow buttons, and remove them with ✕. In a layout
 block, ⇄ swaps the two columns.
 
+A live preview shows the recipe as its public page will look, updated with
+every change to the name, category, cover image or blocks. On screens wider
+than 1100 pixels the form is on the left and the preview on the right; on
+narrower screens the **Muokkaa** and **Esikatselu** tabs switch between them.
+
 **Storage format.** The description stays plain text in the `recipes` table.
 Each block is marked with HTML comments, so blocks stay distinct from ordinary
 text:

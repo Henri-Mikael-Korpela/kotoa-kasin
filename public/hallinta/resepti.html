@@ -27,10 +27,18 @@
   </header>
 
   <main class="admin-main">
-    <div class="container admin-narrow">
+    <div class="container admin-wide">
       <a href="/hallinta" class="back-link">&larr; Takaisin resepteihin</a>
 
-      <section class="admin-card">
+      <!-- Narrow screens switch between the panes; wide screens show both. -->
+      <div class="edit-tabs" role="tablist" aria-label="Näkymä">
+        <button type="button" role="tab" id="editTab" aria-controls="editPane" aria-selected="true">Muokkaa</button>
+        <button type="button" role="tab" id="previewTab" aria-controls="previewPane" aria-selected="false"
+          tabindex="-1">Esikatselu</button>
+      </div>
+
+      <div class="edit-layout" id="editLayout" data-view="edit">
+      <section class="admin-card edit-pane" id="editPane" role="tabpanel" aria-labelledby="editTab">
         <h1 id="editTitle">Uusi resepti</h1>
         <p class="admin-lead">Muutokset näkyvät sivustolla heti tallennuksen jälkeen.</p>
 
@@ -85,6 +93,22 @@
           </div>
         </form>
       </section>
+
+      <section class="preview-pane" id="previewPane" role="tabpanel" aria-labelledby="previewTab">
+        <div class="preview-header">
+          <span class="preview-badge">Esikatselu</span>
+          <span class="preview-address" id="previewAddress"></span>
+        </div>
+        <div class="preview-frame">
+          <article class="recipe-page preview-page" aria-live="off">
+            <span class="recipe-tag" id="previewCategory"></span>
+            <h1 id="previewName"></h1>
+            <figure class="recipe-cover" id="previewCover" hidden></figure>
+            <div class="recipe-content" id="previewContent"></div>
+          </article>
+        </div>
+      </section>
+      </div>
     </div>
   </main>
 

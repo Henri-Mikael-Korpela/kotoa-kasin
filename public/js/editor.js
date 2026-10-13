@@ -5,6 +5,9 @@
 // (mouse or touch) or moved with the arrow buttons, and removed with the cross.
 // A layout block puts two blocks side by side; its columns hold a paragraph,
 // title or image each.
+//
+// Like a native form field, the editor fires a bubbling "input" event on its
+// container whenever its content changes, so a live preview can follow it.
 
 var KasinEditor = (function () {
   var LABELS = {
@@ -118,6 +121,7 @@ var KasinEditor = (function () {
             block.src = image.url;
             showPreview();
             alt.focus();
+            body.dispatchEvent(new Event('input', { bubbles: true }));
           }
         });
       });
@@ -278,6 +282,8 @@ var KasinEditor = (function () {
         nodes.push(empty);
       }
       list.replaceChildren.apply(list, nodes);
+      // Blocks were added, moved or removed.
+      container.dispatchEvent(new Event('input', { bubbles: true }));
     }
 
     // Dragging: the block follows the pointer and a line shows where it lands.
