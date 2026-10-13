@@ -31,6 +31,29 @@ var KasinEditor = (function () {
     return b;
   }
 
+  // The nearest element that scrolls the given one, or null for the window.
+  function scrollingAncestor(element) {
+    for (var node = element.parentElement; node && node !== document.body; node = node.parentElement) {
+      var overflow = window.getComputedStyle(node).overflowY;
+      if ((overflow === 'auto' || overflow === 'scroll') && node.scrollHeight > node.clientHeight) {
+        return node;
+      }
+    }
+    return null;
+  }
+
+  function scrollTop(scroller) {
+    return scroller ? scroller.scrollTop : window.scrollY;
+  }
+
+  function scrollBy(scroller, amount) {
+    if (scroller) {
+      scroller.scrollTop += amount;
+    } else {
+      window.scrollBy(0, amount);
+    }
+  }
+
   function autosize(textarea) {
     textarea.style.height = 'auto';
     textarea.style.height = textarea.scrollHeight + 2 + 'px';
@@ -583,7 +606,8 @@ var KasinEditor = (function () {
         // Not every pointer can be captured; the drag still works over the handle.
       }
       var startY = event.clientY;
-      var startScroll = window.scrollY;
+      var scroller = scrollingAncestor(list);
+      var startScroll = scrollTop(scroller);
       var target = from;
       var marker = document.createElement('div');
       marker.className = 'block-drop-marker';
@@ -616,13 +640,14 @@ var KasinEditor = (function () {
       }
 
       function onMove(moveEvent) {
-        // Scroll when dragging close to the top or bottom of the window.
-        if (moveEvent.clientY < 60) {
-          window.scrollBy(0, -12);
-        } else if (moveEvent.clientY > window.innerHeight - 60) {
-          window.scrollBy(0, 12);
+        // Scroll when dragging close to the top or bottom of what scrolls.
+        var view = scroller ? scroller.getBoundingClientRect() : { top: 0, bottom: window.innerHeight };
+        if (moveEvent.clientY < view.top + 60) {
+          scrollBy(scroller, -12);
+        } else if (moveEvent.clientY > view.bottom - 60) {
+          scrollBy(scroller, 12);
         }
-        var offset = moveEvent.clientY - startY + (window.scrollY - startScroll);
+        var offset = moveEvent.clientY - startY + (scrollTop(scroller) - startScroll);
         item.style.transform = 'translateY(' + offset + 'px)';
         target = targetFor(moveEvent.clientY);
         placeMarker(target);

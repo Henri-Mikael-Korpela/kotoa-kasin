@@ -1938,3 +1938,111 @@ body[data-page="images"] .gallery-summary {
     height: 100%;
   }
 }
+
+/* ---------------------------------------------------
+   Recipe edit page: compact, fits the window; the form
+   and the preview scroll on their own
+--------------------------------------------------- */
+
+body[data-page="edit"] .admin-main {
+  display: flex;
+  flex-direction: column;
+  height: calc(100vh - var(--header-height));
+  height: calc(100dvh - var(--header-height));
+  min-height: 0;
+  padding: 14px 0 16px;
+  overflow: hidden;
+}
+
+body[data-page="edit"] .admin-main > .container {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+body[data-page="edit"] .back-link {
+  margin-bottom: 0.6rem;
+}
+
+body[data-page="edit"] .edit-layout {
+  flex: 1;
+  min-height: 0;
+  grid-template-rows: minmax(0, 1fr);
+  align-items: stretch;
+  gap: 1.4rem;
+}
+
+/* The form scrolls inside its card; the bottom padding lives in the footer. */
+body[data-page="edit"] .edit-pane {
+  position: relative;  /* Holds absolutely placed helpers (screen reader text) inside the scroll. */
+  min-height: 0;
+  overflow-y: auto;
+  padding: 22px 26px 0;
+}
+
+body[data-page="edit"] .edit-pane h1 {
+  font-size: 1.6rem;
+  margin-bottom: 0.2em;
+}
+
+body[data-page="edit"] .admin-lead {
+  margin-bottom: 1rem;
+  font-size: 0.9rem;
+}
+
+body[data-page="edit"] .form-field {
+  margin-bottom: 1rem;
+}
+
+/* Error message and buttons stay at the bottom of the pane while it scrolls. */
+body[data-page="edit"] .form-footer {
+  position: sticky;
+  bottom: 0;
+  z-index: 3;
+  margin: 0 -26px;
+  padding: 0.7rem 26px 0.9rem;
+  background: #fdf9ee;  /* The card's colour, solid, so the form does not show through. */
+  border-top: 1px solid rgba(43, 42, 37, 0.08);
+}
+
+body[data-page="edit"] .form-footer .form-error {
+  min-height: 0;
+  margin: 0 0 0.5rem;
+}
+
+body[data-page="edit"] .form-footer .form-error:empty {
+  display: none;
+}
+
+body[data-page="edit"] .preview-pane {
+  position: static;
+  height: 100%;
+  max-height: none;
+}
+
+@media (max-width: 1100px) {
+  body[data-page="edit"] .edit-tabs {
+    position: static;
+    margin-bottom: 0.6rem;
+  }
+
+  body[data-page="edit"] .edit-tabs button {
+    padding: 0.6rem 1rem;
+  }
+}
+
+@media (max-width: 768px) {
+  body[data-page="edit"] .admin-main {
+    padding: 10px 0 10px;
+  }
+
+  body[data-page="edit"] .edit-pane {
+    padding: 16px 16px 0;
+  }
+
+  body[data-page="edit"] .form-footer {
+    margin: 0 -16px;
+    padding: 0.6rem 16px 0.8rem;
+  }
+}

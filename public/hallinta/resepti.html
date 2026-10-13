@@ -86,10 +86,13 @@
             <p class="form-hint">Rakenna kuvaus lohkoista. Siirrä lohkoa vetämällä ⠿-kahvasta tai nuolinäppäimillä.</p>
           </div>
 
-          <p class="form-error" id="formError" role="alert"></p>
-          <div class="form-actions">
-            <button type="submit" class="btn btn-primary" id="saveButton">Tallenna</button>
-            <a href="/hallinta" class="btn btn-ghost">Peruuta</a>
+          <!-- Stays at the bottom of the edit pane while the form scrolls. -->
+          <div class="form-footer">
+            <p class="form-error" id="formError" role="alert"></p>
+            <div class="form-actions">
+              <button type="submit" class="btn btn-primary" id="saveButton">Tallenna</button>
+              <a href="/hallinta" class="btn btn-ghost">Peruuta</a>
+            </div>
           </div>
         </form>
       </section>
