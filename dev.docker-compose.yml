@@ -19,7 +19,7 @@ services:
     command: >
       sh -c "cmake -S /app -B /build -DCMAKE_BUILD_TYPE=Release &&
              cmake --build /build -j &&
-             exec /build/kasin-httpd -p 8080 -r /app/public -d /data/kotoa.db -m /app/migrations"
+             exec /build/kasin-httpd -p 8080 -r /app/public -d /data/kotoa.db -m /app/migrations -u /data/uploads"
 
   # Deployment tooling: the official Azure CLI image, idling until you run
   # `docker exec -it kotoa-kasin-deploy deploy`. The repo is mounted read-only;

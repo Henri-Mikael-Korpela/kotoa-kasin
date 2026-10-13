@@ -50,6 +50,11 @@ document.addEventListener('DOMContentLoaded', function () {
   if (recipeGrid) {
     loadRecipes(recipeGrid, categoryFilter);
   }
+
+  var recipePage = document.getElementById('recipePage');
+  if (recipePage) {
+    loadRecipePage(recipePage);
+  }
 });
 
 function fetchJson(path) {
@@ -127,12 +132,18 @@ function showCategoryFilter(category) {
   filter.hidden = false;
 }
 
+function recipeUrl(recipe) {
+  return '/resepti?id=' + encodeURIComponent(recipe.id);
+}
+
 function createRecipeCard(recipe) {
   var card = document.createElement('article');
   card.className = 'recipe-card';
 
   var thumb = document.createElement('a');
-  thumb.href = '#';
+  thumb.href = recipeUrl(recipe);
+  thumb.setAttribute('aria-hidden', 'true');
+  thumb.tabIndex = -1;
   thumb.className = 'recipe-thumb';
   thumb.setAttribute('data-emoji', '🌿');
   if (recipe.image) {
@@ -154,11 +165,11 @@ function createRecipeCard(recipe) {
   tag.textContent = recipe.category;
   var title = document.createElement('h3');
   var titleLink = document.createElement('a');
-  titleLink.href = '#';
+  titleLink.href = recipeUrl(recipe);
   titleLink.textContent = recipe.name;
   title.appendChild(titleLink);
   var description = document.createElement('p');
-  description.textContent = recipe.description;
+  description.textContent = recipe.excerpt;
   info.append(tag, title, description);
 
   card.append(thumb, info);
@@ -186,5 +197,45 @@ function loadRecipes(grid, categoryFilter) {
     })
     .catch(function () {
       showRecipeStatus(grid, 'Reseptien lataaminen epäonnistui. Yritä hetken kuluttua uudelleen.');
+    });
+}
+
+// Recipe page (/resepti?id=...).
+
+function loadRecipePage(page) {
+  var id = new URLSearchParams(window.location.search).get('id');
+  var status = document.getElementById('recipeStatus');
+  if (!id) {
+    status.textContent = 'Reseptiä ei löytynyt.';
+    return;
+  }
+  fetchJson('/api/recipes/' + encodeURIComponent(id))
+    .then(function (recipe) {
+      document.title = recipe.name + ' — Kotoa käsin';
+      var tag = document.getElementById('recipeCategory');
+      tag.href = categoryUrl(recipe.category);
+      tag.textContent = recipe.category;
+      document.getElementById('recipeName').textContent = recipe.name;
+
+      var cover = document.getElementById('recipeCover');
+      var src = KasinBlocks.safeSrc(recipe.image);
+      if (src) {
+        var img = document.createElement('img');
+        img.src = src;
+        img.alt = '';
+        img.addEventListener('error', function () {
+          cover.hidden = true;
+        });
+        cover.replaceChildren(img);
+        cover.hidden = false;
+      }
+      KasinBlocks.render(KasinBlocks.parse(recipe.description), document.getElementById('recipeContent'));
+      status.hidden = true;
+      page.hidden = false;
+    })
+    .catch(function (error) {
+      status.textContent = error.message === 'HTTP 404'
+        ? 'Reseptiä ei löytynyt. Se on ehkä poistettu.'
+        : 'Reseptin lataaminen epäonnistui. Yritä hetken kuluttua uudelleen.';
     });
 }

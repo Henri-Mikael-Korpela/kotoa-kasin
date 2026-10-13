@@ -55,6 +55,10 @@ typedef struct {
     sqlite3_stmt *insert_category;
     sqlite3_stmt *update_category;
     sqlite3_stmt *delete_category;
+    sqlite3_stmt *list_images;
+    sqlite3_stmt *find_image;
+    sqlite3_stmt *insert_image;
+    sqlite3_stmt *delete_image;
     sqlite3_stmt *parse_login;
 } Db;
 
@@ -94,7 +98,9 @@ void db_close(Db *db);
 
 /**
  * Appends all recipes as a JSON array of
- * {id, name, image, description, category_id, category}.
+ * {id, name, image, excerpt, category_id, category}. The excerpt is plain text
+ * from the start of the description (its first paragraph block), so the list
+ * stays small however long the descriptions are.
  */
 Db_Status db_list_recipes_json(Db *db, Str_Builder *out);
 
@@ -153,6 +159,37 @@ Db_Status db_update_category(Db *db, int64_t id, Str json);
  * @return DB_CONFLICT while recipes still belong to it.
  */
 Db_Status db_delete_category(Db *db, int64_t id);
+
+/**
+ * Appends all uploaded images, newest first, as a JSON array of
+ * {id, url, original_name, size, created_at, used}, where used counts the
+ * recipes that show the image.
+ */
+Db_Status db_list_images_json(Db *db, Str_Builder *out);
+
+/**
+ * Records an uploaded image before its file is written.
+ *
+ * @param extension File extension: jpg, png, gif or webp.
+ * @param original_name Name of the file the user uploaded.
+ * @param size File size in bytes.
+ * @param id Receives the image's id; the file is named <id>.<extension>.
+ */
+Db_Status db_create_image(Db *db, Str extension, Str original_name, int64_t size, int64_t *id);
+
+/**
+ * Deletes an image's record, unless a recipe still shows it.
+ *
+ * @param file_name Receives the image's file name, for removing the file.
+ * @return DB_CONFLICT while a recipe uses the image.
+ */
+Db_Status db_delete_image(Db *db, int64_t id, Str_Builder *file_name);
+
+/**
+ * Deletes an image's record without checking whether it is used; for undoing
+ * db_create_image() when the file could not be written.
+ */
+Db_Status db_forget_image(Db *db, int64_t id);
 
 /**
  * Extracts the string fields username and password from a JSON object.

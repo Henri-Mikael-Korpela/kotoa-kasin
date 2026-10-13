@@ -7,6 +7,8 @@ from an admin view at `/hallinta`.
 - **Server:** C, Linux only. epoll, one worker per thread, all memory reserved
   at startup, no `malloc` in the request path. Uses SQLite as its only library.
 - **Site:** static pages in `public/`; the front page loads recipes from the API.
+- **Recipe pages:** every recipe has a page at `/resepti?id=<id>`, built from
+  the blocks of its description.
 - **Admin:** log in at `/hallinta/kirjaudu`, then add, edit and delete recipes
   and categories.
 
@@ -205,13 +207,85 @@ run when the new version starts.
 Databases created before `migrations/` existed (schema version 2) are adopted
 on first start: `0001` and `0002` are recorded as applied without running.
 
+## Recipe editor and images
+
+Recipe descriptions are written in a block editor on the recipe's edit page in
+the admin view, in the spirit of WordPress Gutenberg:
+
+| Block | Name in storage | Options |
+|---|---|---|
+| Paragraph | `paragraph` | none; line breaks are kept |
+| Title | `title` | `level`: 2, 3 or 4 (H2-H4; H1 is the recipe name) |
+| Image | `image` | `src` (image address), `alt` (description for screen readers), `caption` (optional) |
+| Layout | `layout` | two columns side by side; each holds a paragraph, title or image |
+
+Add blocks from the bar under the list, drag them by the ⠿ handle (mouse or
+touch) or move them with the arrow buttons, and remove them with ✕. In a layout
+block, ⇄ swaps the two columns.
+
+**Storage format.** The description stays plain text in the `recipes` table.
+Each block is marked with HTML comments, so blocks stay distinct from ordinary
+text:
+
+```
+<!-- block:title {"level":2} -->
+Ainekset
+<!-- /block:title -->
+
+<!-- block:paragraph -->
+Sulata mehiläisvaha vesihauteessa.
+<!-- /block:paragraph -->
+
+<!-- block:image {"src":"/uploads/3.jpg","alt":"Valmis voide"} /-->
+
+<!-- block:layout -->
+<!-- block:image {"src":"/uploads/4.jpg","alt":""} /-->
+<!-- block:paragraph -->
+Teksti kuvan oikealla puolella.
+<!-- /block:paragraph -->
+<!-- /block:layout -->
+```
+
+- Options are a JSON object after the block name, with `<` and `>` written as
+  `\u003c` and `\u003e` so they can never end the comment.
+- In block text, `\` is stored as `\\` and `<!--` as `<\!--`, so text can never
+  start a marker.
+- An unused layout column is `<!-- block:empty /-->`.
+- Text outside any marker (descriptions written before the editor) reads as
+  paragraphs, split at blank lines.
+- Parsing, writing and rendering live in `public/js/blocks.js`, shared by the
+  editor and the public recipe page. Unknown blocks are skipped, and text is
+  always inserted as text, never as HTML.
+
+Descriptions may be up to 50,000 characters. Lists (`GET /api/recipes`) carry
+only an `excerpt`, the text of the first paragraph block, to stay small.
+
+**Images.** Upload images on the **Kuvat** page in the admin view (button, or
+drag files onto the page), or straight from the image picker in the editor.
+
+- The browser scales each image down to at most 1600 pixels on the longer side
+  and saves it as JPEG before uploading. That keeps files small and removes the
+  metadata phones store in photos, such as location.
+- Files are stored in the uploads directory (`-u`, `/data/uploads` in Docker
+  and on Azure) as `<id>.jpg`, served at `/uploads/<id>.jpg` with permanent
+  caching (ids are never reused), and listed in the `images` table.
+- An image that a recipe shows (as its card image or in a block) cannot be
+  deleted; the gallery shows how many recipes use each image.
+
+**Large requests.** Requests normally use each connection's fixed 8 KiB
+buffer. Uploads and long descriptions borrow one of a few 2 MiB buffers that
+each worker reserves at startup, so nothing is allocated while the server
+runs. Only signed-in requests may borrow one, and the connection closes after
+such a request so the buffer is free again at once. When every buffer is busy,
+the server answers 503 and the browser can retry.
+
 ## Project layout
 
 | Path | Contents |
 |---|---|
 | `src/` | The server: `main.c` (HTTP, routing, API), `db.c` (SQLite), `migrate.c` (migration runner), `sql.c` (SQLite helpers), `jwt.c`, `sha256.c`, `str.c`, `arena.c`, `buddy.c` |
 | `migrations/` | Database migrations, `<number>__<name>.sql` |
-| `public/` | The site: pages, `css/`, `js/`, `assets/`; `hallinta/` holds the admin pages |
+| `public/` | The site: pages, `css/`, `js/`, `assets/`; `hallinta/` holds the admin pages. `js/blocks.js` is the block format, `js/editor.js` the editor, `js/gallery.js` the image gallery |
 | `Dockerfile` | Production image (used for Azure) |
 | `Dockerfile.dev`, `dev.docker-compose.yml` | Local development and the deployment tooling container |
 | `deploy/` | `bin/deploy` (the deployment script) and `config.env` (its settings) |
@@ -220,8 +294,12 @@ on first start: `0001` and `0002` are recorded as applied without running.
 ### Server options
 
 ```
-kasin-httpd [-p port] [-t threads] [-r docroot] [-d database] [-m migrations] [-s local|share]
+kasin-httpd [-p port] [-t threads] [-r docroot] [-d database] [-m migrations]
+            [-u uploads] [-s local|share]
 ```
+
+`-u` names the directory uploaded images are stored in (default `uploads`,
+created if missing).
 
 `-m` names the migrations directory (default `migrations`, relative to the
 working directory).
@@ -231,7 +309,8 @@ the Azure deployment). SQLite cannot rely on POSIX file locks or WAL there, so
 it locks with a `<database>.lock` directory and keeps a rollback journal.
 `-s local` (the default) uses normal locking and WAL. Memory limits are set at build time through the
 CMake options `KASIN_MAX_CONNS_PER_WORKER`, `KASIN_REQ_BUF_SIZE`,
-`KASIN_RESP_BUF_SIZE` and `KASIN_DB_HEAP_SIZE`.
+`KASIN_RESP_BUF_SIZE`, `KASIN_BIG_BUF_SIZE` (largest upload or response,
+default 2 MiB), `KASIN_BIG_BUFS_PER_WORKER` (default 2) and `KASIN_DB_HEAP_SIZE`.
 
 ### API
 
@@ -241,7 +320,10 @@ Reading is public; changes need a login token (`Authorization: Bearer <token>`).
 |---|---|
 | `POST /api/login` | `{username, password}` returns `{token, expires_at}` |
 | `GET /api/session` | Checks the token (login required) |
-| `GET`, `POST /api/recipes` | List, create (`name`, `image`, `description`, `category_id`) |
+| `GET`, `POST /api/recipes` | List (with `excerpt` instead of `description`), create (`name`, `image`, `description`, `category_id`) |
 | `GET`, `PUT`, `DELETE /api/recipes/{id}` | Read, update, delete |
 | `GET`, `POST /api/categories` | List (alphabetical), create (`name`) |
 | `GET`, `PUT`, `DELETE /api/categories/{id}` | Read, rename, delete (409 while recipes use it) |
+| `GET /api/images` | List uploaded images with how many recipes use each (login required) |
+| `POST /api/images` | Upload: the raw JPEG, PNG, GIF or WebP file as the body, original name in `X-File-Name` (login required) |
+| `DELETE /api/images/{id}` | Delete (login required; 409 while a recipe shows it) |

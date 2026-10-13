@@ -63,6 +63,12 @@
 #ifndef RESP_BUF_SIZE
 #define RESP_BUF_SIZE 32768
 #endif
+#ifndef BIG_BUF_SIZE
+#define BIG_BUF_SIZE (2 * 1024 * 1024)  // A large request body or response: uploads, long recipes.
+#endif
+#ifndef BIG_BUFS_PER_WORKER
+#define BIG_BUFS_PER_WORKER 2
+#endif
 #ifndef DB_HEAP_SIZE
 #define DB_HEAP_SIZE (32 * 1024 * 1024)  // SQLite heap; BUDDY_MIN_BLOCK times a power of two.
 #endif
@@ -78,6 +84,8 @@
 
 static_assert (RESP_BUF_SIZE >= 4 * HEAD_RESERVE, "RESP_BUF_SIZE too small");
 static_assert (REQ_BUF_SIZE >= 512, "REQ_BUF_SIZE too small");
+static_assert (BIG_BUF_SIZE >= REQ_BUF_SIZE && BIG_BUF_SIZE >= RESP_BUF_SIZE, "BIG_BUF_SIZE too small");
+static_assert (BIG_BUFS_PER_WORKER >= 1, "BIG_BUFS_PER_WORKER must be at least 1");
 
 #define CACHE_LINE 64
 
@@ -93,9 +101,9 @@ typedef struct Conn {
     uint32_t      events;  /**< Epoll events currently registered. */
     int           state;
     int           keepalive;
-    uint32_t      req_len;  /**< Bytes buffered in req. */
-    uint32_t      resp_pos;  /**< Next byte of resp to send. */
-    uint32_t      resp_end;  /**< One past last byte of resp. */
+    uint32_t      req_len;  /**< Bytes buffered in in. */
+    uint32_t      resp_pos;  /**< Next byte of out to send. */
+    uint32_t      resp_end;  /**< One past last byte of out. */
     int           file_fd;  /**< File streamed after resp, or -1. */
     off_t         file_pos;  /**< Next byte of file_fd to send. */
     off_t         file_end;  /**< One past last byte of file_fd to send. */
@@ -103,6 +111,11 @@ typedef struct Conn {
     struct Conn  *next_free;
     uint8_t      *req;  /**< REQ_BUF_SIZE bytes, lives in the arena. */
     uint8_t      *resp;  /**< RESP_BUF_SIZE bytes, lives in the arena. */
+    uint8_t      *in;  /**< Request bytes: req, or big while a large body arrives. */
+    uint32_t      in_cap;
+    uint8_t      *out;  /**< Response bytes: resp, or big for a large response. */
+    uint32_t      out_cap;
+    uint8_t      *big;  /**< Large buffer borrowed from the worker, or NULL. */
 } Conn;
 
 typedef struct Worker {
@@ -114,15 +127,48 @@ typedef struct Worker {
     Conn               *free_list;
     struct epoll_event *events;
     Db                  db;  /**< This worker's own database connection. */
+    uint8_t            *big_free[BIG_BUFS_PER_WORKER];  /**< Large buffers not lent out. */
+    int                 big_free_count;
 } Worker;
 
 static volatile sig_atomic_t STOP_REQUESTED = 0;
 static int ROOT_FD = -1;  // Directory static files are served from.
+static int UPLOADS_FD = -1;  // Directory uploaded images are stored in.
 static uint8_t JWT_KEY[SHA256_DIGEST_SIZE];  // Signs session tokens.
 
 // Fixed admin credentials for now.
 static Str const ADMIN_USERNAME = STR_INIT("hanna");
 static Str const ADMIN_PASSWORD = STR_INIT("koti");
+
+/*
+ * Large buffers. A few per worker are reserved at startup and lent to one
+ * connection at a time, for request bodies or responses that do not fit the
+ * connection's own small buffers. A connection holds at most one.
+ */
+
+static bool big_acquire(Worker *w, Conn *c) {
+    if (c->big) {
+        return false;
+    }
+    if (w->big_free_count == 0) {
+        return false;
+    }
+    c->big = w->big_free[--w->big_free_count];
+    return true;
+}
+
+// Returns the large buffer and points the connection back at its own buffers.
+static void big_release(Worker *w, Conn *c) {
+    if (!c->big) {
+        return;
+    }
+    w->big_free[w->big_free_count++] = c->big;
+    c->big = NULL;
+    c->in = c->req;
+    c->in_cap = REQ_BUF_SIZE;
+    c->out = c->resp;
+    c->out_cap = RESP_BUF_SIZE;
+}
 
 // Small helpers.
 
@@ -186,6 +232,10 @@ static Str mime_for(Str path) {
             .mime = STR_INIT("image/x-icon"),
         },
         {
+            .ext = STR_INIT(".webp"),
+            .mime = STR_INIT("image/webp"),
+        },
+        {
             .ext = STR_INIT(".wasm"),
             .mime = STR_INIT("application/wasm"),
         },
@@ -227,6 +277,8 @@ static Str status_reason(int status) {
         return STR("Length Required");
     case 413:
         return STR("Content Too Large");
+    case 415:
+        return STR("Unsupported Media Type");
     case 431:
         return STR("Request Header Fields Too Large");
     case 503:
@@ -261,7 +313,7 @@ static void write_head(Str_Builder *b, Conn const *c, int status, Str ctype,
 static void respond_simple(Conn *c, int status, Str ctype, Str body, bool head_only,
                            Str extra_headers) {
     Str_Builder b;
-    str_builder_init(&b, (char *)c->resp, RESP_BUF_SIZE);
+    str_builder_init(&b, (char *)c->out, c->out_cap);
     write_head(&b, c, status, ctype, body.len, extra_headers);
     if (!head_only) {
         str_builder_append(&b, body);
@@ -288,7 +340,7 @@ static void respond_error(Conn *c, int status, bool head_only) {
  * behind HEAD_RESERVE bytes kept free for the head. Finish with respond_built().
  */
 static void body_begin(Conn *c, Str_Builder *body) {
-    str_builder_init(body, (char *)c->resp + HEAD_RESERVE, RESP_BUF_SIZE - HEAD_RESERVE);
+    str_builder_init(body, (char *)c->out + HEAD_RESERVE, c->out_cap - HEAD_RESERVE);
 }
 
 /**
@@ -310,7 +362,7 @@ static void respond_built(Conn *c, int status, Str ctype, Str_Builder const *bod
         return;
     }
     c->resp_pos = HEAD_RESERVE - (uint32_t)head.len;
-    memcpy(c->resp + c->resp_pos, head.data, head.len);
+    memcpy(c->out + c->resp_pos, head.data, head.len);
     c->resp_end = HEAD_RESERVE + (head_only ? 0 : (uint32_t)body->len);
 }
 
@@ -383,8 +435,33 @@ static int open_in_root(Str rel_path, struct stat *st) {
 }
 
 /**
- * Writes the response header into resp and keeps the file open so its body can
- * be streamed with sendfile(), whatever its size.
+ * Writes the response head and keeps the file open so its body can be streamed
+ * with sendfile(), whatever its size. Takes ownership of fd.
+ */
+static void send_file(Conn *c, int fd, struct stat const *st, Str mime, bool head_only,
+                      Str extra_headers) {
+    Str_Builder hdr;
+    str_builder_init(&hdr, (char *)c->out, c->out_cap);
+    write_head(&hdr, c, 200, mime, (uint64_t)st->st_size, extra_headers);
+    if (hdr.overflow) {
+        close(fd);
+        respond_error(c, 500, head_only);
+        return;
+    }
+    c->resp_pos = 0;
+    c->resp_end = (uint32_t)hdr.len;
+
+    if (head_only || st->st_size == 0) {
+        close(fd);
+        return;
+    }
+    c->file_fd = fd;  // Streamed by conn_advance() once the head is out.
+    c->file_pos = 0;
+    c->file_end = st->st_size;
+}
+
+/**
+ * Serves a file from the docroot.
  *
  * Clean URLs are supported: a directory serves its index.html, and a missing
  * path without an extension falls back to the same path plus ".html".
@@ -417,30 +494,34 @@ static void serve_file(Conn *c, Str rel_path, bool head_only, bool is_root) {
         }
         return;
     }
-    if (!S_ISREG(st.st_mode)) {
-        close(fd);
+    send_file(c, fd, &st, mime_for(str_builder_str(&path)), head_only, STR(""));
+}
+
+/**
+ * Serves an uploaded image from the uploads directory. Image ids are never
+ * reused, so the file at a URL never changes and may be cached for good.
+ */
+static void serve_upload(Conn *c, Str file_name, bool head_only) {
+    char name_z[64];  // openat() needs a NUL-terminated name.
+    Str number;
+    Str extension;
+    uint64_t id;
+    bool valid = str_split_once(file_name, STR("."), &number, &extension) &&
+                 str_to_u64(number, &id) && str_find_char(extension, '.') == STR_NPOS &&
+                 str_to_cstr(file_name, name_z, sizeof name_z);
+    int fd = valid && UPLOADS_FD >= 0
+             ? openat(UPLOADS_FD, name_z, O_RDONLY | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK)
+             : -1;
+    struct stat st;
+    if (fd < 0 || fstat(fd, &st) < 0 || !S_ISREG(st.st_mode)) {
+        if (fd >= 0) {
+            close(fd);
+        }
         respond_error(c, 404, head_only);
         return;
     }
-
-    Str_Builder hdr;
-    str_builder_init(&hdr, (char *)c->resp, RESP_BUF_SIZE);
-    write_head(&hdr, c, 200, mime_for(str_builder_str(&path)), (uint64_t)st.st_size, STR(""));
-    if (hdr.overflow) {
-        close(fd);
-        respond_error(c, 500, head_only);
-        return;
-    }
-    c->resp_pos = 0;
-    c->resp_end = (uint32_t)hdr.len;
-
-    if (head_only || st.st_size == 0) {
-        close(fd);
-        return;
-    }
-    c->file_fd = fd;  // Streamed by conn_advance() once the header is out.
-    c->file_pos = 0;
-    c->file_end = st.st_size;
+    send_file(c, fd, &st, mime_for(file_name), head_only,
+              STR("Cache-Control: public, max-age=31536000, immutable\r\n"));
 }
 
 // Request parsing.
@@ -452,6 +533,7 @@ typedef struct {
     bool     bad_content_length;
     uint64_t content_length;
     Str      authorization;
+    Str      file_name;  /**< X-File-Name: an upload's original name, URL-encoded. */
 } Request_Headers;
 
 typedef struct {
@@ -494,6 +576,8 @@ static void scan_headers(Str headers, Request_Headers *h) {
             h->chunked = true;  // Any transfer coding: the body length is unknown.
         } else if (str_eq_nocase(name, STR("authorization"))) {
             h->authorization = value;
+        } else if (str_eq_nocase(name, STR("x-file-name"))) {
+            h->file_name = value;
         }
     }
 }
@@ -506,14 +590,18 @@ static int64_t unix_now(void) {
     return ts.tv_sec;
 }
 
-static bool authenticate(Request const *r, Jwt_Claims *claims) {
-    Str auth = r->headers->authorization;
+static bool authenticate_headers(Request_Headers const *h, Jwt_Claims *claims) {
+    Str auth = h->authorization;
     Str scheme = STR("Bearer ");
     if (auth.len <= scheme.len || !str_eq_nocase(str_slice(auth, 0, scheme.len), scheme)) {
         return false;
     }
     Str token = str_trim(str_slice(auth, scheme.len, auth.len));
     return jwt_verify(token, JWT_KEY, sizeof JWT_KEY, unix_now(), claims);
+}
+
+static bool authenticate(Request const *r, Jwt_Claims *claims) {
+    return authenticate_headers(r->headers, claims);
 }
 
 static void respond_unauthorized(Conn *c) {
@@ -630,6 +718,13 @@ static void api_get(Worker *w, Conn *c, Request const *r, Resource const *res, i
     Str_Builder body;
     body_begin(c, &body);
     Db_Status status = res->get(&w->db, id, &body);
+    // A long item (a recipe full of blocks) is built again in a large buffer.
+    if (status == DB_TOO_LARGE && big_acquire(w, c)) {
+        c->out = c->big;
+        c->out_cap = BIG_BUF_SIZE;
+        body_begin(c, &body);
+        status = res->get(&w->db, id, &body);
+    }
     if (status != DB_OK) {
         respond_db_error(c, status);
         return;
@@ -681,6 +776,198 @@ static void respond_method_not_allowed(Conn *c, Str allow_header) {
     respond_json_error(c, 405, STR("method not allowed"), allow_header);
 }
 
+// The file extension for an image, judged by its first bytes; empty if unknown.
+static Str image_extension(Str bytes) {
+    if (str_starts_with(bytes, STR("\xFF\xD8\xFF"))) {
+        return STR("jpg");
+    }
+    if (str_starts_with(bytes, STR("\x89PNG\r\n\x1A\n"))) {
+        return STR("png");
+    }
+    if (str_starts_with(bytes, STR("GIF87a")) || str_starts_with(bytes, STR("GIF89a"))) {
+        return STR("gif");
+    }
+    if (str_starts_with(bytes, STR("RIFF")) && str_eq(str_slice(bytes, 8, 12), STR("WEBP"))) {
+        return STR("webp");
+    }
+    return STR("");
+}
+
+/*
+ * The X-File-Name header holds the original name URL-encoded by the browser.
+ * It is stored as sent, for display only, and dropped if it holds anything an
+ * encoded name cannot.
+ */
+static Str clean_original_name(Str name) {
+    if (name.len > 255 || str_find_any(name, STR("\"\\<> ")) != STR_NPOS) {
+        return STR("");
+    }
+    for (size_t i = 0; i < name.len; i++) {
+        if ((unsigned char)name.data[i] < 0x21 || (unsigned char)name.data[i] > 0x7E) {
+            return STR("");
+        }
+    }
+    return name;
+}
+
+// Writes bytes to a new file in the uploads directory, then moves it into place.
+static bool write_upload(Str file_name, Str bytes) {
+    char final_buf[64];
+    char part_buf[64];
+    Str_Builder final_name;
+    Str_Builder part_name;
+    str_builder_init(&final_name, final_buf, sizeof final_buf);
+    str_builder_init(&part_name, part_buf, sizeof part_buf);
+    str_builder_append(&final_name, file_name);
+    str_builder_append(&part_name, file_name);
+    str_builder_append(&part_name, STR(".part"));
+    char const *final_z = str_builder_cstr(&final_name);  // openat() and renameat() need C strings.
+    char const *part_z = str_builder_cstr(&part_name);
+    if (!final_z || !part_z || UPLOADS_FD < 0) {
+        return false;
+    }
+
+    int fd = openat(UPLOADS_FD, part_z, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
+    if (fd < 0) {
+        return false;
+    }
+    size_t written = 0;
+    while (written < bytes.len) {
+        ssize_t n = write(fd, bytes.data + written, bytes.len - written);
+        if (n > 0) {
+            written += (size_t)n;
+        } else if (n < 0 && errno == EINTR) {
+            continue;
+        } else {
+            break;
+        }
+    }
+    bool ok = written == bytes.len && fsync(fd) == 0;
+    ok = close(fd) == 0 && ok;
+    ok = ok && renameat(UPLOADS_FD, part_z, UPLOADS_FD, final_z) == 0;
+    if (!ok) {
+        unlinkat(UPLOADS_FD, part_z, 0);
+    }
+    return ok;
+}
+
+static void api_upload_image(Worker *w, Conn *c, Request const *r) {
+    if (!authenticate(r, NULL)) {
+        respond_unauthorized(c);
+        return;
+    }
+    Str extension = image_extension(r->body);
+    if (extension.len == 0) {
+        respond_json_error(c, 415, STR("only JPEG, PNG, GIF and WebP images are accepted"), NO_STORE);
+        return;
+    }
+
+    int64_t id;
+    Db_Status status = db_create_image(&w->db, extension, clean_original_name(r->headers->file_name),
+                                       (int64_t)r->body.len, &id);
+    if (status != DB_OK) {
+        respond_db_error(c, status);
+        return;
+    }
+
+    char name_buf[64];
+    Str_Builder file_name;
+    str_builder_init(&file_name, name_buf, sizeof name_buf);
+    str_builder_append_u64(&file_name, (uint64_t)id);
+    str_builder_append(&file_name, STR("."));
+    str_builder_append(&file_name, extension);
+    if (!write_upload(str_builder_str(&file_name), r->body)) {
+        fprintf(stderr, "upload: cannot write %.*s: %s\n", STR_ARG(str_builder_str(&file_name)),
+                strerror(errno));
+        db_forget_image(&w->db, id);
+        respond_json_error(c, 500, STR("cannot store the image"), NO_STORE);
+        return;
+    }
+
+    Str_Builder body;
+    body_begin(c, &body);
+    str_builder_append(&body, STR("{\"id\":"));
+    str_builder_append_u64(&body, (uint64_t)id);
+    str_builder_append(&body, STR(",\"url\":\"/uploads/"));
+    str_builder_append(&body, str_builder_str(&file_name));
+    str_builder_append(&body, STR("\"}"));
+    respond_built(c, 201, JSON_TYPE, &body, false, NO_STORE);
+}
+
+static void api_list_images(Worker *w, Conn *c, Request const *r) {
+    if (!authenticate(r, NULL)) {
+        respond_unauthorized(c);
+        return;
+    }
+    Str_Builder body;
+    body_begin(c, &body);
+    Db_Status status = db_list_images_json(&w->db, &body);
+    if (status == DB_TOO_LARGE && big_acquire(w, c)) {
+        c->out = c->big;
+        c->out_cap = BIG_BUF_SIZE;
+        body_begin(c, &body);
+        status = db_list_images_json(&w->db, &body);
+    }
+    if (status != DB_OK) {
+        respond_db_error(c, status);
+        return;
+    }
+    respond_built(c, 200, JSON_TYPE, &body, r->head_only, NO_STORE);
+}
+
+static void api_delete_image(Worker *w, Conn *c, Request const *r, int64_t id) {
+    if (!authenticate(r, NULL)) {
+        respond_unauthorized(c);
+        return;
+    }
+    char name_buf[64];
+    Str_Builder file_name;
+    str_builder_init(&file_name, name_buf, sizeof name_buf);
+    Db_Status status = db_delete_image(&w->db, id, &file_name);
+    if (status != DB_OK) {
+        respond_db_error(c, status);
+        return;
+    }
+    char const *name_z = str_builder_cstr(&file_name);  // unlinkat() needs a C string.
+    if (name_z && unlinkat(UPLOADS_FD, name_z, 0) != 0 && errno != ENOENT) {
+        fprintf(stderr, "upload: cannot remove %s: %s\n", name_z, strerror(errno));
+    }
+    respond_id(c, 200, id);
+}
+
+/**
+ * Handles /api/images and /api/images/{id}. Images are uploaded as the raw
+ * file in the request body, not as JSON.
+ *
+ * @return False when the path is something else.
+ */
+static bool handle_images(Worker *w, Conn *c, Request const *r) {
+    Str collection = STR("/api/images");
+    if (str_eq(r->path, collection)) {
+        if (str_eq(r->method, STR("GET")) || r->head_only) {
+            api_list_images(w, c, r);
+        } else if (str_eq(r->method, STR("POST"))) {
+            api_upload_image(w, c, r);
+        } else {
+            respond_method_not_allowed(c, STR("Cache-Control: no-store\r\nAllow: GET, HEAD, POST\r\n"));
+        }
+        return true;
+    }
+    Str item = str_slice(r->path, collection.len, r->path.len);
+    if (!str_starts_with(r->path, collection) || !str_starts_with(item, STR("/"))) {
+        return false;
+    }
+    uint64_t id;
+    if (!str_to_u64(str_slice(item, 1, item.len), &id) || id == 0 || id > INT64_MAX) {
+        respond_db_error(c, DB_NOT_FOUND);
+    } else if (str_eq(r->method, STR("DELETE"))) {
+        api_delete_image(w, c, r, (int64_t)id);
+    } else {
+        respond_method_not_allowed(c, STR("Cache-Control: no-store\r\nAllow: DELETE\r\n"));
+    }
+    return true;
+}
+
 /**
  * Handles a request whose path is a resource's collection or one of its items.
  *
@@ -728,7 +1015,7 @@ static bool handle_resource(Worker *w, Conn *c, Request const *r, Resource const
  *   POST   /api/login             {username, password} -> {token, expires_at}
  *   GET    /api/session           (auth) -> {username, expires_at}
  *
- *   GET    /api/recipes           -> [{id, name, image, description, category_id, category}, ...]
+ *   GET    /api/recipes           -> [{id, name, image, excerpt, category_id, category}, ...]
  *   POST   /api/recipes           (auth) {name, image, description, category_id} -> 201 {id}
  *   GET    /api/recipes/{id}      -> {id, name, image, description, category_id, category}
  *   PUT    /api/recipes/{id}      (auth) {name, image, description, category_id} -> {id}
@@ -739,6 +1026,10 @@ static bool handle_resource(Worker *w, Conn *c, Request const *r, Resource const
  *   GET    /api/categories/{id}   -> {id, name, recipe_count}
  *   PUT    /api/categories/{id}   (auth) {name} -> {id}, or 409 if the name is taken
  *   DELETE /api/categories/{id}   (auth) -> {id}, or 409 while recipes use it
+ *
+ *   GET    /api/images            (auth) -> [{id, url, original_name, size, created_at, used}, ...]
+ *   POST   /api/images            (auth) raw JPEG/PNG/GIF/WebP body, X-File-Name -> 201 {id, url}
+ *   DELETE /api/images/{id}       (auth) -> {id}, or 409 while a recipe shows it
  */
 static void handle_api(Worker *w, Conn *c, Request const *r) {
     if (str_eq(r->path, STR("/api/login"))) {
@@ -757,6 +1048,9 @@ static void handle_api(Worker *w, Conn *c, Request const *r) {
         }
         return;
     }
+    if (handle_images(w, c, r)) {
+        return;
+    }
     for (size_t i = 0; i < sizeof RESOURCES / sizeof RESOURCES[0]; i++) {
         if (handle_resource(w, c, r, &RESOURCES[i])) {
             return;
@@ -768,10 +1062,11 @@ static void handle_api(Worker *w, Conn *c, Request const *r) {
 // Routing.
 
 /**
- * Returns 1 and fills c->resp if a full request (head and body) is buffered, else 0.
+ * Returns 1 and fills the response if a full request (head and body) is
+ * buffered, else 0.
  */
 static int build_response(Worker *w, Conn *c) {
-    Str buffered = str_make((char const *)c->req, c->req_len);
+    Str buffered = str_make((char const *)c->in, c->req_len);
     Str head;
     Str after_head;
     if (!str_split_once(buffered, STR("\r\n\r\n"), &head, &after_head)) {
@@ -810,6 +1105,7 @@ static int build_response(Worker *w, Conn *c) {
         .bad_content_length = false,
         .content_length = 0,
         .authorization = STR(""),
+        .file_name = STR(""),
     };
     scan_headers(headers, &h);
     if (h.bad_content_length) {
@@ -820,16 +1116,36 @@ static int build_response(Worker *w, Conn *c) {
         respond_error(c, 411, false);
         goto done;
     }
-    if (h.content_length > REQ_BUF_SIZE - head_len) {  // The body can never fit.
-        respond_error(c, 413, false);
-        goto done;
+    if (h.content_length > c->in_cap - head_len) {
+        /*
+         * The body does not fit the connection's own buffer. Move the request
+         * into a large buffer, which only signed-in users may tie up.
+         */
+        if (c->in == c->big || h.content_length > BIG_BUF_SIZE - head_len) {
+            respond_error(c, 413, false);
+            goto done;
+        }
+        if (!authenticate_headers(&h, NULL)) {
+            respond_unauthorized(c);
+            goto done;
+        }
+        if (!big_acquire(w, c)) {
+            respond_json_error(c, 503, STR("server busy, try again"),
+                               STR("Cache-Control: no-store\r\nRetry-After: 2\r\n"));
+            goto done;
+        }
+        memcpy(c->big, c->in, c->req_len);
+        c->in = c->big;
+        c->in_cap = BIG_BUF_SIZE;
+        return 0;  // Wait for the rest of the body.
     }
     size_t request_len = head_len + (size_t)h.content_length;
     if (buffered.len < request_len) {
         return 0;  // Wait for the rest of the body.
     }
     consumed = request_len;
-    c->keepalive = http11 ? !h.close : h.keepalive;
+    // After a large body the connection closes, so the large buffer is free at once.
+    c->keepalive = (http11 ? !h.close : h.keepalive) && c->in != c->big;
 
     Request r = {
         .method = method,
@@ -865,6 +1181,11 @@ static int build_response(Worker *w, Conn *c) {
         goto done;
     }
 
+    if (str_starts_with(r.path, STR("/uploads/"))) {
+        serve_upload(c, str_slice(r.path, 9, r.path.len), r.head_only);
+        goto done;
+    }
+
     if (str_eq(r.path, STR("/health"))) {
         respond_simple(c, 200, STR("text/plain; charset=utf-8"), STR("ok\n"), r.head_only, STR(""));
         goto done;
@@ -882,9 +1203,20 @@ static int build_response(Worker *w, Conn *c) {
     serve_file(c, str_builder_str(&path), r.head_only, rel.len == 0);
 
 done:
+    if (c->big && c->in == c->big) {
+        // A large request: the connection closes after the response.
+        c->keepalive = 0;
+        c->req_len = 0;
+        c->in = c->req;
+        c->in_cap = REQ_BUF_SIZE;
+        if (c->out != c->big) {
+            big_release(w, c);
+        }
+        return 1;
+    }
     // The request is fully handled; keep any pipelined bytes behind it.
     c->req_len -= (uint32_t)consumed;
-    memmove(c->req, c->req + consumed, c->req_len);
+    memmove(c->in, c->in + consumed, c->req_len);
     return 1;
 }
 
@@ -907,6 +1239,7 @@ static void conn_close(Worker *w, Conn *c) {
         close(c->file_fd);
         c->file_fd = -1;
     }
+    big_release(w, c);
     close(c->fd);  // Also removes it from the epoll set.
     c->fd = -1;
     c->next_free = w->free_list;
@@ -920,7 +1253,7 @@ static void conn_advance(Worker *w, Conn *c) {
     for (;;) {
         if (c->state == ST_READING) {
             if (!build_response(w, c)) {
-                if (c->req_len >= REQ_BUF_SIZE) {  // Headers too large.
+                if (c->req_len >= c->in_cap) {  // Headers too large.
                     c->keepalive = 0;
                     c->req_len = 0;
                     respond_error(c, 431, 0);
@@ -933,7 +1266,7 @@ static void conn_advance(Worker *w, Conn *c) {
         }
 
         while (c->resp_pos < c->resp_end) {
-            ssize_t n = send(c->fd, c->resp + c->resp_pos, c->resp_end - c->resp_pos,
+            ssize_t n = send(c->fd, c->out + c->resp_pos, c->resp_end - c->resp_pos,
                              MSG_NOSIGNAL);
             if (n > 0) {
                 c->resp_pos += (uint32_t)n;
@@ -972,6 +1305,9 @@ static void conn_advance(Worker *w, Conn *c) {
             close(c->file_fd);
             c->file_fd = -1;
         }
+        if (c->big && c->out == c->big) {
+            big_release(w, c);  // A large response has been sent.
+        }
 
         if (!c->keepalive) {
             conn_close(w, c);
@@ -988,8 +1324,8 @@ static void conn_advance(Worker *w, Conn *c) {
 }
 
 static void conn_on_readable(Worker *w, Conn *c, int64_t now) {
-    if (c->req_len < REQ_BUF_SIZE) {
-        ssize_t n = recv(c->fd, c->req + c->req_len, REQ_BUF_SIZE - c->req_len, 0);
+    if (c->req_len < c->in_cap) {
+        ssize_t n = recv(c->fd, c->in + c->req_len, c->in_cap - c->req_len, 0);
         if (n > 0) {
             c->req_len += (uint32_t)n;
         } else if (n == 0) {
@@ -1028,6 +1364,11 @@ static void accept_all(Worker *w, int64_t now) {
         c->keepalive = 0;
         c->req_len = c->resp_pos = c->resp_end = 0;
         c->file_fd = -1;
+        c->in = c->req;
+        c->in_cap = REQ_BUF_SIZE;
+        c->out = c->resp;
+        c->out_cap = RESP_BUF_SIZE;
+        c->big = NULL;
         c->file_pos = c->file_end = 0;
         c->last_active = now;
         c->events = EPOLLIN;
@@ -1118,8 +1459,10 @@ static void on_signal(int sig) {
 
 static void usage(Str argv0) {
     fprintf(stderr,
-            "usage: %.*s [-p port] [-t threads] [-r docroot] [-d database] [-m migrations] [-s local|share]\n"
+            "usage: %.*s [-p port] [-t threads] [-r docroot] [-d database] [-m migrations]\n"
+            "       [-u uploads] [-s local|share]\n"
             "  -m  directory of <number>__<name>.sql migrations (default: migrations)\n"
+            "  -u  directory uploaded images are stored in, created if missing (default: uploads)\n"
             "  -s  where the database lives; use share for a network share such as Azure Files\n",
             STR_ARG(argv0));
 }
@@ -1134,10 +1477,11 @@ int main(int argc, char **argv) {
     Str root = STR("");
     Str db_path = STR("kotoa.db");
     Str migrations_dir = STR("migrations");
+    Str uploads_dir = STR("uploads");
     Db_Storage db_storage = DB_STORAGE_LOCAL;
     int opt;
     // CHECK What does getopt do?
-    while ((opt = getopt(argc, argv, "p:t:r:d:m:s:h")) != -1) {
+    while ((opt = getopt(argc, argv, "p:t:r:d:m:u:s:h")) != -1) {
         uint64_t value;
         switch (opt) {
         case 'p':
@@ -1162,6 +1506,9 @@ int main(int argc, char **argv) {
             break;
         case 'm':
             migrations_dir = str_from_cstr(optarg);
+            break;
+        case 'u':
+            uploads_dir = str_from_cstr(optarg);
             break;
         case 's':
             if (str_eq(str_from_cstr(optarg), STR("local"))) {
@@ -1200,12 +1547,26 @@ int main(int argc, char **argv) {
         }
     }
 
+    char uploads_z[MAX_PATH_LEN];  // mkdir() and open() need a NUL-terminated path.
+    if (str_to_cstr(uploads_dir, uploads_z, sizeof uploads_z)) {
+        if (mkdir(uploads_z, 0755) != 0 && errno != EEXIST) {
+            fprintf(stderr, "warning: cannot create uploads directory '%s': %s\n",
+                    uploads_z, strerror(errno));
+        }
+        UPLOADS_FD = open(uploads_z, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+    }
+    if (UPLOADS_FD < 0) {
+        fprintf(stderr, "warning: cannot open uploads directory '%.*s'; image uploads are off\n",
+                STR_ARG(uploads_dir));
+    }
+
     // The one and only memory reservation.
     size_t per_worker = arena_align_up(sizeof (Worker), CACHE_LINE)
                       + arena_align_up(sizeof (struct epoll_event) * EVENT_BATCH, CACHE_LINE)
                       + sizeof (Conn) * MAX_CONNS_PER_WORKER
                       + (size_t)MAX_CONNS_PER_WORKER * REQ_BUF_SIZE
-                      + (size_t)MAX_CONNS_PER_WORKER * RESP_BUF_SIZE;
+                      + (size_t)MAX_CONNS_PER_WORKER * RESP_BUF_SIZE
+                      + (size_t)BIG_BUFS_PER_WORKER * arena_align_up(BIG_BUF_SIZE, CACHE_LINE);
     size_t total = arena_align_up(per_worker * (size_t)nworkers + DB_HEAP_SIZE + CACHE_LINE * 8,
                                   4096);
 
@@ -1257,6 +1618,15 @@ int main(int argc, char **argv) {
             fputs("arena exhausted\n", stderr);
             return EX_SOFTWARE;
         }
+        w->big_free_count = 0;
+        for (int j = 0; j < BIG_BUFS_PER_WORKER; j++) {
+            uint8_t *big = arena_alloc(&arena, BIG_BUF_SIZE, CACHE_LINE);
+            if (!big) {
+                fputs("arena exhausted\n", stderr);
+                return EX_SOFTWARE;
+            }
+            w->big_free[w->big_free_count++] = big;
+        }
 
         w->id = (int)i;
         w->free_list = NULL;
@@ -1303,10 +1673,12 @@ int main(int argc, char **argv) {
     signal(SIGPIPE, SIG_IGN);
 
     printf("kasin-httpd: port %d, %ld workers, %d conns/worker, req %d B, resp %d B, "
-           "reserved %.1f MiB (SQLite heap %d MiB), docroot %.*s, database %.*s\n",
+           "reserved %.1f MiB (SQLite heap %d MiB, %d x %d KiB large buffers per worker), "
+           "docroot %.*s, database %.*s, uploads %.*s\n",
            port, nworkers, MAX_CONNS_PER_WORKER, REQ_BUF_SIZE, RESP_BUF_SIZE,
            (double)total / (1024.0 * 1024.0), DB_HEAP_SIZE / (1024 * 1024),
-           STR_ARG(root.len > 0 ? root : STR("(none)")), STR_ARG(db_path));
+           BIG_BUFS_PER_WORKER, BIG_BUF_SIZE / 1024,
+           STR_ARG(root.len > 0 ? root : STR("(none)")), STR_ARG(db_path), STR_ARG(uploads_dir));
     fflush(stdout);
 
     long const worker_count = nworkers;

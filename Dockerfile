@@ -20,4 +20,4 @@ EXPOSE 8080
 # Two workers fit the smallest Container Apps size (0.25 vCPU, 0.5 GiB) with room
 # to spare. /data is an Azure Files share; SQLite cannot take POSIX file locks there, so
 # it locks with a ".lock" directory and keeps a rollback journal (-s share).
-CMD ["kasin-httpd", "-p", "8080", "-t", "2", "-r", "/srv/public", "-d", "/data/kotoa.db", "-m", "/srv/migrations", "-s", "share"]
+CMD ["kasin-httpd", "-p", "8080", "-t", "2", "-r", "/srv/public", "-d", "/data/kotoa.db", "-m", "/srv/migrations", "-u", "/data/uploads", "-s", "share"]

@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="fi">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="robots" content="noindex">
+  <title>Kuvat &mdash; Kotoa käsin</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=Work+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/css/style.css">
+  <link rel="stylesheet" href="/css/admin.css">
+</head>
+<body data-page="images">
+
+  <header class="site-header admin-header">
+    <div class="nav-container">
+      <a href="/hallinta" class="logo">Kotoa käsin<span class="logo-badge">Hallinta</span></a>
+      <nav class="admin-nav">
+        <a href="/hallinta">Reseptit</a>
+        <a href="/hallinta/kuvat" aria-current="page">Kuvat</a>
+        <span class="admin-user" id="adminUser"></span>
+        <a href="/" target="_blank" rel="noopener">Sivusto</a>
+        <button type="button" id="logoutButton">Kirjaudu ulos</button>
+      </nav>
+    </div>
+  </header>
+
+  <main class="admin-main">
+    <div class="container">
+      <div class="admin-toolbar">
+        <div>
+          <h1>Kuvat</h1>
+          <p>Reseptien kuvat. Lataa uusia kuvia painikkeesta tai vetämällä tiedostot sivulle.</p>
+        </div>
+        <label class="btn btn-primary gallery-upload-button">Lataa kuvia
+          <input type="file" id="galleryUpload" accept="image/*" multiple hidden>
+        </label>
+      </div>
+
+      <div class="gallery-drop-zone" id="galleryDropZone" aria-hidden="true">Pudota kuvat ladattaviksi</div>
+      <p class="form-error" id="galleryError" role="alert"></p>
+      <ul class="gallery-grid gallery-page-grid" id="galleryGrid"></ul>
+      <p class="admin-status" id="galleryStatus" aria-live="polite">Ladataan kuvia&hellip;</p>
+    </div>
+  </main>
+
+  <script src="/js/admin.js"></script>
+  <script src="/js/blocks.js"></script>
+  <script src="/js/gallery.js"></script>
+  <script src="/js/editor.js"></script>
+</body>
+</html>

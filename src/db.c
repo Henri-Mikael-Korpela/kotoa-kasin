@@ -182,6 +182,34 @@ bool db_prepare_file(Str path, Db_Storage storage, Str migrations_dir) {
     "json_object('id', r.id, 'name', r.name, 'image', r.image,"          \
     " 'description', r.description, 'category_id', c.id, 'category', c.name)"
 
+/*
+ * Plain text for list views, from the start of a recipe description: the text
+ * of its first paragraph block, or the whole description when it has no blocks
+ * (plain text from before the editor). Unescapes the two sequences the editor
+ * escapes in block text. A '<!-- block:paragraph -->' marker is 24 bytes long.
+ */
+#define PARAGRAPH_OPEN "'<!-- block:paragraph -->'"
+#define AFTER_PARAGRAPH_OPEN                                             \
+    "substr(r.description, instr(r.description, " PARAGRAPH_OPEN ") + 24)"
+#define RECIPE_EXCERPT                                                   \
+    "substr(trim(replace(replace(CASE"                                   \
+    " WHEN instr(r.description, " PARAGRAPH_OPEN ") > 0 THEN"            \
+    "  substr(" AFTER_PARAGRAPH_OPEN ", 1,"                              \
+    "   instr(" AFTER_PARAGRAPH_OPEN ", '<!-- /block:paragraph -->') - 1)" \
+    " WHEN instr(r.description, '<!-- block:') = 0 THEN r.description"   \
+    " ELSE '' END, '<\\!--', '<!--'), '\\\\', '\\'), char(32, 9, 10, 13)), 1, 300)"
+
+// Columns of a recipe in list views.
+#define RECIPE_SUMMARY_JSON                                              \
+    "json_object('id', r.id, 'name', r.name, 'image', r.image,"          \
+    " 'excerpt', " RECIPE_EXCERPT ", 'category_id', c.id, 'category', c.name)"
+
+// Where an image is served from, and how many recipes show it.
+#define IMAGE_URL "('/uploads/' || i.id || '.' || i.extension)"
+#define IMAGE_USE_COUNT                                                  \
+    "(SELECT count(*) FROM recipes"                                      \
+    " WHERE image = " IMAGE_URL " OR instr(description, " IMAGE_URL ") > 0)"
+
 #define CATEGORY_JSON                                                    \
     "json_object('id', c.id, 'name', c.name, 'recipe_count',"            \
     " (SELECT count(*) FROM recipes WHERE category_id = c.id))"
@@ -204,6 +232,10 @@ bool db_open(Db *db, Str path, Db_Storage storage) {
         .insert_category = NULL,
         .update_category = NULL,
         .delete_category = NULL,
+        .list_images = NULL,
+        .find_image = NULL,
+        .insert_image = NULL,
+        .delete_image = NULL,
         .parse_login = NULL,
     };
     if (!open_connection(&db->conn, path, storage) || !sql_exec(db->conn, STR("PRAGMA foreign_keys = ON;"), STR("enabling foreign keys"))) {
@@ -215,7 +247,7 @@ bool db_open(Db *db, Str path, Db_Storage storage) {
                 STR("SELECT CASE WHEN json_valid(?1) THEN json_type(?1) = 'object' ELSE 0 END")) &&
         prepare(db, &db->list_recipes,
                 STR("SELECT json_group_array(json(recipe)) FROM ("
-                " SELECT " RECIPE_JSON " AS recipe"
+                " SELECT " RECIPE_SUMMARY_JSON " AS recipe"
                 " FROM recipes r JOIN categories c ON c.id = r.category_id ORDER BY r.id)")) &&
         prepare(db, &db->get_recipe,
                 STR("SELECT " RECIPE_JSON
@@ -248,6 +280,18 @@ bool db_open(Db *db, Str path, Db_Storage storage) {
                 STR("UPDATE categories SET name = trim(" TEXT_FIELD("2", "name", "NULL") ")"
                 " WHERE id = ?1")) &&
         prepare(db, &db->delete_category, STR("DELETE FROM categories WHERE id = ?1")) &&
+        prepare(db, &db->list_images,
+                STR("SELECT json_group_array(json(image)) FROM ("
+                " SELECT json_object('id', i.id, 'url', " IMAGE_URL ","
+                " 'original_name', i.original_name, 'size', i.size,"
+                " 'created_at', i.created_at, 'used', " IMAGE_USE_COUNT ") AS image"
+                " FROM images i ORDER BY i.id DESC)")) &&
+        prepare(db, &db->find_image,
+                STR("SELECT i.extension, " IMAGE_USE_COUNT " FROM images i WHERE i.id = ?1")) &&
+        prepare(db, &db->insert_image,
+                STR("INSERT INTO images (extension, original_name, size) VALUES (?1, ?2, ?3)"
+                " RETURNING id")) &&
+        prepare(db, &db->delete_image, STR("DELETE FROM images WHERE id = ?1")) &&
         prepare(db, &db->parse_login,
                 STR("SELECT json_extract(?1, '$.username'), json_extract(?1, '$.password')"));
     if (!ok) {
@@ -268,6 +312,10 @@ void db_close(Db *db) {
     sqlite3_finalize(db->insert_category);
     sqlite3_finalize(db->update_category);
     sqlite3_finalize(db->delete_category);
+    sqlite3_finalize(db->list_images);
+    sqlite3_finalize(db->find_image);
+    sqlite3_finalize(db->insert_image);
+    sqlite3_finalize(db->delete_image);
     sqlite3_finalize(db->parse_login);
     sqlite3_close(db->conn);
     db->conn = NULL;
@@ -306,7 +354,7 @@ static void finish(sqlite3_stmt *stmt) {
 }
 
 static Db_Status check_json_object(Db *db, Str json) {
-    if (json.len > 64 * 1024 || !sql_bind_str(db->is_json_object, 1, json)) {
+    if (json.len > 1024 * 1024 || !sql_bind_str(db->is_json_object, 1, json)) {
         finish(db->is_json_object);
         return DB_INVALID;
     }
@@ -433,6 +481,54 @@ Db_Status db_update_category(Db *db, int64_t id, Str json) {
 
 Db_Status db_delete_category(Db *db, int64_t id) {
     return delete_row(db, db->delete_category, id, category_status_from);
+}
+
+Db_Status db_list_images_json(Db *db, Str_Builder *out) {
+    return append_text_result(db->list_images, out);
+}
+
+Db_Status db_create_image(Db *db, Str extension, Str original_name, int64_t size, int64_t *id) {
+    sqlite3_stmt *stmt = db->insert_image;
+    if (!sql_bind_str(stmt, 1, extension) || !sql_bind_str(stmt, 2, original_name) ||
+        sqlite3_bind_int64(stmt, 3, size) != SQLITE_OK) {
+        finish(stmt);
+        return DB_ERROR;
+    }
+    int rc = sqlite3_step(stmt);
+    if (rc == SQLITE_ROW) {
+        *id = sqlite3_column_int64(stmt, 0);
+        rc = sqlite3_step(stmt);  // Runs the statement to completion.
+    }
+    Db_Status status = rc == SQLITE_DONE ? DB_OK : status_from(rc);
+    finish(stmt);
+    return status;
+}
+
+Db_Status db_delete_image(Db *db, int64_t id, Str_Builder *file_name) {
+    sqlite3_stmt *find = db->find_image;
+    sqlite3_bind_int64(find, 1, id);
+    int rc = sqlite3_step(find);
+    Db_Status status = DB_OK;
+    if (rc == SQLITE_DONE) {
+        status = DB_NOT_FOUND;
+    } else if (rc != SQLITE_ROW) {
+        status = status_from(rc);
+    } else if (sqlite3_column_int64(find, 1) > 0) {
+        status = DB_CONFLICT;
+    } else {
+        str_builder_append_u64(file_name, (uint64_t)id);
+        str_builder_append(file_name, STR("."));
+        str_builder_append(file_name, sql_column_str(find, 0));
+    }
+    finish(find);
+    if (status != DB_OK) {
+        return status;
+    }
+    return db_forget_image(db, id);
+}
+
+Db_Status db_forget_image(Db *db, int64_t id) {
+    return delete_row(db, db->delete_image, id, status_from);
 }
 
 static bool append_text_column(sqlite3_stmt *stmt, int column, Str_Builder *out) {

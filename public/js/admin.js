@@ -2,6 +2,7 @@
 // as "Authorization: Bearer <token>" on API calls that need it.
 
 var TOKEN_KEY = 'kotoaKasinToken';
+var DESCRIPTION_MAX_LENGTH = 50000;  // The limit in the recipes table.
 var LOGIN_PAGE = '/hallinta/kirjaudu';
 var LIST_PAGE = '/hallinta';
 
@@ -229,7 +230,7 @@ function createRecipeRow(recipe, errorEl, onDeleted) {
   var name = document.createElement('h2');
   name.textContent = recipe.name;
   var description = document.createElement('p');
-  description.textContent = recipe.description || 'Ei kuvausta.';
+  description.textContent = recipe.excerpt || 'Ei kuvausta.';
   info.append(tag, name, description);
 
   var edit = document.createElement('span');
@@ -468,9 +469,10 @@ function initEditPage() {
   var fields = {
     name: document.getElementById('recipeName'),
     category: document.getElementById('recipeCategory'),
-    image: document.getElementById('recipeImage'),
-    description: document.getElementById('recipeDescription')
+    image: document.getElementById('recipeImage')
   };
+  var pickImage = document.getElementById('pickRecipeImage');
+  var editor = KasinEditor.create(document.getElementById('descriptionEditor'), '');
   var id = new URLSearchParams(window.location.search).get('id');
   setupLogout();
 
@@ -479,6 +481,14 @@ function initEditPage() {
     preview = form.querySelector('.image-field .mini-thumb');
   }
   fields.image.addEventListener('input', updatePreview);
+  pickImage.addEventListener('click', function () {
+    KasinGallery.pick().then(function (image) {
+      if (image) {
+        fields.image.value = image.url;
+        updatePreview();
+      }
+    });
+  });
 
   function fillCategories(categories) {
     var placeholder = document.createElement('option');
@@ -517,7 +527,7 @@ function initEditPage() {
         fields.name.value = recipe.name;
         fields.category.value = String(recipe.category_id);
         fields.image.value = recipe.image;
-        fields.description.value = recipe.description;
+        editor = KasinEditor.create(document.getElementById('descriptionEditor'), recipe.description);
         updatePreview();
         form.hidden = false;
       }
@@ -541,7 +551,7 @@ function initEditPage() {
       name: fields.name.value.trim(),
       category_id: Number(fields.category.value),
       image: fields.image.value.trim(),
-      description: fields.description.value.trim()
+      description: editor.serialize()
     };
     if (!recipe.name) {
       errorEl.textContent = 'Anna reseptille nimi.';
@@ -551,6 +561,11 @@ function initEditPage() {
     if (!fields.category.value) {
       errorEl.textContent = 'Valitse reseptille kategoria.';
       fields.category.focus();
+      return;
+    }
+    if (recipe.description.length > DESCRIPTION_MAX_LENGTH) {
+      errorEl.textContent = 'Kuvaus on liian pitkä (' + recipe.description.length + ' merkkiä, enintään ' +
+        DESCRIPTION_MAX_LENGTH + '). Lyhennä tekstiä tai poista lohkoja.';
       return;
     }
 
@@ -566,8 +581,7 @@ function initEditPage() {
         saveButton.disabled = false;
         if (error.status === 400) {
           errorEl.textContent = 'Tarkista kentät: nimi ja kategoria ovat pakollisia. Nimi saa olla enintään ' +
-            '200 merkkiä, kuvan osoite 500 ja kuvaus 2000 merkkiä. Jos kategoria poistettiin juuri, ' +
-            'lataa sivu uudelleen.';
+            '200 merkkiä ja kuvan osoite 500 merkkiä. Jos kategoria poistettiin juuri, lataa sivu uudelleen.';
         } else if (error.status === 413) {
           errorEl.textContent = 'Resepti on liian pitkä tallennettavaksi. Lyhennä kuvausta.';
         } else if (error.status === 404) {
@@ -587,5 +601,7 @@ document.addEventListener('DOMContentLoaded', function () {
     initListPage();
   } else if (page === 'edit') {
     initEditPage();
+  } else if (page === 'images') {
+    KasinGallery.initPage();
   }
 });

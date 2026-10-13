@@ -10,10 +10,13 @@ if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
 endif()
 
 # Memory is reserved once at startup from these values:
-#   total ~= threads * conns_per_worker * (req_buf + resp_buf + sizeof(Conn)) + db_heap
+#   total ~= threads * (conns_per_worker * (req_buf + resp_buf + sizeof(Conn))
+#                       + big_bufs_per_worker * big_buf) + db_heap
 set(KASIN_MAX_CONNS_PER_WORKER 512      CACHE STRING "Connection slots per worker thread")
 set(KASIN_REQ_BUF_SIZE         8192     CACHE STRING "Request buffer bytes per connection (head + body)")
 set(KASIN_RESP_BUF_SIZE        32768    CACHE STRING "Response buffer bytes per connection")
+set(KASIN_BIG_BUF_SIZE         2097152  CACHE STRING "Large buffer bytes, lent for uploads and long recipes")
+set(KASIN_BIG_BUFS_PER_WORKER  2        CACHE STRING "Large buffers per worker thread")
 set(KASIN_DB_HEAP_SIZE         33554432 CACHE STRING "SQLite heap bytes (64 times a power of two)")
 
 find_package(Threads REQUIRED)
@@ -34,5 +37,7 @@ target_compile_definitions(kasin-httpd PRIVATE
   MAX_CONNS_PER_WORKER=${KASIN_MAX_CONNS_PER_WORKER}
   REQ_BUF_SIZE=${KASIN_REQ_BUF_SIZE}
   RESP_BUF_SIZE=${KASIN_RESP_BUF_SIZE}
+  BIG_BUF_SIZE=${KASIN_BIG_BUF_SIZE}
+  BIG_BUFS_PER_WORKER=${KASIN_BIG_BUFS_PER_WORKER}
   DB_HEAP_SIZE=${KASIN_DB_HEAP_SIZE})
 target_link_libraries(kasin-httpd PRIVATE Threads::Threads SQLite::SQLite3)

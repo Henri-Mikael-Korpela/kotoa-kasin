@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="fi">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Resepti &mdash; Kotoa käsin</title>
+  <meta name="description" content="Kotoa käsin &ndash; resepti.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link
+    href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=Work+Sans:wght@300;400;500;600&display=swap"
+    rel="stylesheet">
+  <link rel="stylesheet" href="/css/style.css">
+</head>
+
+<body>
+
+  <header class="site-header is-scrolled" id="siteHeader" data-solid>
+    <div class="nav-container">
+      <a href="/" class="logo">Kotoa käsin</a>
+
+      <nav class="nav-links" id="navLinks">
+        <a href="/">Etusivu</a>
+        <div class="nav-item" id="recipesNavItem">
+          <a href="/#reseptit">Reseptit</a>
+          <ul class="nav-submenu" id="categoryMenu" aria-label="Reseptikategoriat" hidden></ul>
+        </div>
+        <a href="/meista">Meistä</a>
+        <a href="/yhteystiedot">Yhteystiedot</a>
+      </nav>
+
+      <button class="menu-toggle" id="menuToggle" aria-label="Avaa valikko" aria-expanded="false"
+        aria-controls="navLinks">
+        <span></span>
+        <span></span>
+        <span></span>
+      </button>
+    </div>
+  </header>
+
+  <main>
+
+    <section class="recipe-page-section">
+      <div class="container recipe-page-container">
+        <a href="/#reseptit" class="recipe-back">&larr; Kaikki reseptit</a>
+        <p class="recipe-grid-status" id="recipeStatus" aria-live="polite">Ladataan reseptiä&hellip;</p>
+
+        <article class="recipe-page" id="recipePage" hidden>
+          <a class="recipe-tag" id="recipeCategory" href="/#reseptit"></a>
+          <h1 id="recipeName"></h1>
+          <figure class="recipe-cover" id="recipeCover" hidden></figure>
+          <div class="recipe-content" id="recipeContent"></div>
+        </article>
+      </div>
+    </section>
+
+  </main>
+
+  <footer class="site-footer" id="yhteystiedot">
+    <div class="container footer-inner">
+      <div class="footer-col">
+        <p class="logo footer-logo">Kotoa käsin</p>
+        <p>Kotitekoista kosmetiikkaa ja ruokaa luonnon rytmissä.</p>
+      </div>
+      <div class="footer-col">
+        <h4>Sivukartta</h4>
+        <a href="/">Etusivu</a>
+        <a href="/#reseptit">Reseptit</a>
+        <a href="/meista">Meistä</a>
+        <a href="/yhteystiedot">Yhteystiedot</a>
+      </div>
+      <div class="footer-col">
+        <h4>Meistä</h4>
+        <a href="/meista">Tarinamme</a>
+        <a href="#">Usein kysytyt kysymykset</a>
+      </div>
+      <div class="footer-col">
+        <h4>Ota yhteyttä</h4>
+        <a href="mailto:hannakkorpela@gmail.com">hannakkorpela@gmail.com</a>
+        <a href="https://www.facebook.com/profile.php?id=61591586081686" target="_blank"
+          rel="noopener noreferrer">Facebook</a>
+        <a href="https://www.instagram.com/kotoa.kasin" target="_blank" rel="noopener noreferrer">Instagram</a>
+      </div>
+    </div>
+    <p class="footer-copy">&copy; <span id="year"></span> Kotoa käsin. Kaikki oikeudet pidätetään.</p>
+  </footer>
+
+  <script src="/js/blocks.js"></script>
+  <script src="/js/main.js"></script>
+</body>
+
+</html>

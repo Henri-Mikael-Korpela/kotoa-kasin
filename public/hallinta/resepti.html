@@ -17,6 +17,8 @@
     <div class="nav-container">
       <a href="/hallinta" class="logo">Kotoa käsin<span class="logo-badge">Hallinta</span></a>
       <nav class="admin-nav">
+        <a href="/hallinta" aria-current="page">Reseptit</a>
+        <a href="/hallinta/kuvat">Kuvat</a>
         <span class="admin-user" id="adminUser"></span>
         <a href="/" target="_blank" rel="noopener">Sivusto</a>
         <button type="button" id="logoutButton">Kirjaudu ulos</button>
@@ -49,16 +51,20 @@
             <label for="recipeImage">Kuva</label>
             <div class="image-field">
               <div>
-                <input id="recipeImage" type="text" maxlength="500" placeholder="/assets/recipes/esimerkki.jpg" spellcheck="false">
-                <p class="form-hint">Kuvan osoite sivustolla, esimerkiksi /assets/recipes/laventelisaippua.jpg.</p>
+                <div class="input-with-button">
+                  <input id="recipeImage" type="text" maxlength="500" placeholder="/uploads/1.jpg" spellcheck="false">
+                  <button type="button" class="btn btn-ghost" id="pickRecipeImage">Valitse galleriasta</button>
+                </div>
+                <p class="form-hint">Reseptikortin kuva. Valitse se galleriasta tai kirjoita kuvan osoite sivustolla.</p>
               </div>
               <span class="mini-thumb" id="imagePreview"></span>
             </div>
           </div>
 
           <div class="form-field">
-            <label for="recipeDescription">Kuvaus</label>
-            <textarea id="recipeDescription" maxlength="2000"></textarea>
+            <span class="form-label" id="descriptionLabel">Kuvaus</span>
+            <div class="block-editor" id="descriptionEditor" role="group" aria-labelledby="descriptionLabel"></div>
+            <p class="form-hint">Rakenna kuvaus lohkoista. Siirrä lohkoa vetämällä ⠿-kahvasta tai nuolinäppäimillä.</p>
           </div>
 
           <p class="form-error" id="formError" role="alert"></p>
@@ -72,5 +78,8 @@
   </main>
 
   <script src="/js/admin.js"></script>
+  <script src="/js/blocks.js"></script>
+  <script src="/js/gallery.js"></script>
+  <script src="/js/editor.js"></script>
 </body>
 </html>
