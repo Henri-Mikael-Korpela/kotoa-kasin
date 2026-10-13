@@ -1,6 +1,8 @@
 #include "db.h"
 
 #include <stdio.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 #include "buddy.h"
 
@@ -157,9 +159,19 @@ static bool exec(sqlite3 *conn, char const *sql) {
     return true;
 }
 
-static bool open_connection(sqlite3 **conn, char const *path) {
+/*
+ * SQLite's "unix-dotfile" VFS locks a database by creating a directory called
+ * "<database>.lock" and removing it afterwards. Creating a directory is atomic
+ * on network shares that cannot do POSIX byte-range locks. It also keeps other
+ * processes out, such as the old revision while a new one starts.
+ */
+static char const *vfs_for(Db_Storage storage) {
+    return storage == DB_STORAGE_SHARE ? "unix-dotfile" : NULL;
+}
+
+static bool open_connection(sqlite3 **conn, char const *path, Db_Storage storage) {
     int flags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_NOMUTEX;
-    if (sqlite3_open_v2(path, conn, flags, NULL) != SQLITE_OK) {
+    if (sqlite3_open_v2(path, conn, flags, vfs_for(storage)) != SQLITE_OK) {
         fprintf(stderr, "db: cannot open '%s': %s\n", path,
                 *conn ? sqlite3_errmsg(*conn) : "out of memory");
         sqlite3_close(*conn);
@@ -196,13 +208,38 @@ static bool run_migration(sqlite3 *conn, int index) {
     return false;
 }
 
-bool db_prepare_file(char const *path) {
+/*
+ * A crash while a lock is held leaves the lock directory behind, which would
+ * block every later start. Wait briefly in case a live process (an old revision
+ * shutting down) is about to release it, then remove it.
+ */
+static void clear_stale_lock(char const *path) {
+    char lock_path[1024];
+    snprintf(lock_path, sizeof lock_path, "%s.lock", path);
+    struct stat st;
+    for (int i = 0; i < 30 && stat(lock_path, &st) == 0; i++) {
+        usleep(100 * 1000);
+    }
+    if (stat(lock_path, &st) == 0) {
+        fprintf(stderr, "db: removing stale lock %s\n", lock_path);
+        if (rmdir(lock_path) != 0) {
+            unlink(lock_path);
+        }
+    }
+}
+
+bool db_prepare_file(char const *path, Db_Storage storage) {
+    if (storage == DB_STORAGE_SHARE) {
+        clear_stale_lock(path);
+    }
     sqlite3 *conn;
-    if (!open_connection(&conn, path)) {
+    if (!open_connection(&conn, path, storage)) {
         return false;
     }
     // Table rebuilds in migrations need foreign keys off; checked once at the end.
-    bool ok = exec(conn, "PRAGMA journal_mode = WAL; PRAGMA foreign_keys = OFF;");
+    bool ok = exec(conn, storage == DB_STORAGE_LOCAL ? "PRAGMA journal_mode = WAL;"
+                                                      : "PRAGMA journal_mode = DELETE;") &&
+              exec(conn, "PRAGMA foreign_keys = OFF;");
 
     int version = 0;
     ok = ok && read_user_version(conn, &version);
@@ -261,7 +298,7 @@ static bool prepare(Db *db, sqlite3_stmt **stmt, char const *sql) {
     return true;
 }
 
-bool db_open(Db *db, char const *path) {
+bool db_open(Db *db, char const *path, Db_Storage storage) {
     *db = (Db) {
         .conn = NULL,
         .is_json_object = NULL,
@@ -277,7 +314,7 @@ bool db_open(Db *db, char const *path) {
         .delete_category = NULL,
         .parse_login = NULL,
     };
-    if (!open_connection(&db->conn, path) || !exec(db->conn, "PRAGMA foreign_keys = ON;")) {
+    if (!open_connection(&db->conn, path, storage) || !exec(db->conn, "PRAGMA foreign_keys = ON;")) {
         db_close(db);
         return false;
     }

@@ -31,6 +31,17 @@ typedef enum {
     DB_ERROR,
 } Db_Status;
 
+/**
+ * Where the database file lives. Local disks support SQLite's normal POSIX file
+ * locks and write-ahead logging. Network shares (Azure Files over SMB) support
+ * neither reliably, so SQLite is told to lock with a ".lock" directory next to
+ * the database and to keep a rollback journal.
+ */
+typedef enum {
+    DB_STORAGE_LOCAL,
+    DB_STORAGE_SHARE,
+} Db_Storage;
+
 typedef struct {
     sqlite3      *conn;
     sqlite3_stmt *is_json_object;
@@ -61,16 +72,19 @@ bool db_global_init(void *heap_mem, size_t heap_size);
  * Creates the database file if needed and migrates its schema to the current
  * version, seeding initial data on the way.
  *
+ * @param path Database file.
+ * @param storage Kind of storage the file lives on.
  * @return False on failure, after printing why.
  */
-bool db_prepare_file(char const *path);
+bool db_prepare_file(char const *path, Db_Storage storage);
 
 /**
  * Opens a connection for the calling thread and prepares its statements.
  *
+ * @param storage Must match what was passed to db_prepare_file().
  * @return False on failure, after printing why.
  */
-bool db_open(Db *db, char const *path);
+bool db_open(Db *db, char const *path, Db_Storage storage);
 
 /**
  * Finalizes statements and closes the connection.

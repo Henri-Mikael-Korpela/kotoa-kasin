@@ -2,6 +2,7 @@
 # Then open http://localhost:8080  (Docker Desktop on Windows, WSL2 backend).
 # Re-run `docker compose -f dev.docker-compose.yml restart` to rebuild after edits.
 # The recipe database lives in the db-data volume and survives restarts.
+# Deploy to Azure with:  docker exec -it kotoa-kasin-deploy deploy  (see README.md)
 services:
   httpd:
     build:
@@ -20,6 +21,23 @@ services:
              cmake --build /build -j &&
              exec /build/kasin-httpd -p 8080 -r /app/public -d /data/kotoa.db"
 
+  # Deployment tooling: the official Azure CLI image, idling until you run
+  # `docker exec -it kotoa-kasin-deploy deploy`. The repo is mounted read-only;
+  # the scripts live in deploy/.
+  deploy:
+    image: mcr.microsoft.com/azure-cli:2.67.0
+    container_name: kotoa-kasin-deploy
+    init: true
+    volumes:
+      - .:/workspace:ro
+      - azure-login:/root/.azure  # keeps the `az login` between restarts
+    working_dir: /workspace
+    command: >
+      sh -c "printf '#!/bin/sh\nexec bash /workspace/deploy/bin/deploy \"$$@\"\n' > /usr/local/bin/deploy &&
+             chmod +x /usr/local/bin/deploy &&
+             exec sleep infinity"
+
 volumes:
   build-cache:
   db-data:
+  azure-login:

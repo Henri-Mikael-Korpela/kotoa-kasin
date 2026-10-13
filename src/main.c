@@ -1117,7 +1117,10 @@ static void on_signal(int sig) {
 }
 
 static void usage(char const *argv0) {
-    fprintf(stderr, "usage: %s [-p port] [-t threads] [-r docroot]\n", argv0);
+    fprintf(stderr,
+            "usage: %s [-p port] [-t threads] [-r docroot] [-d database] [-s local|share]\n"
+            "  -s  where the database lives; use share for a network share such as Azure Files\n",
+            argv0);
 }
 
 int main(int argc, char **argv) {
@@ -1127,9 +1130,10 @@ int main(int argc, char **argv) {
     
     char const *root = NULL;
     char const *db_path = "kotoa.db";
+    Db_Storage db_storage = DB_STORAGE_LOCAL;
     int opt;
     // CHECK What does getopt do?
-    while ((opt = getopt(argc, argv, "p:t:r:d:h")) != -1) {
+    while ((opt = getopt(argc, argv, "p:t:r:d:s:h")) != -1) {
         uint64_t value;
         switch (opt) {
         case 'p':
@@ -1151,6 +1155,16 @@ int main(int argc, char **argv) {
             break;
         case 'd':
             db_path = optarg;
+            break;
+        case 's':
+            if (str_eq(str_from_cstr(optarg), STR("local"))) {
+                db_storage = DB_STORAGE_LOCAL;
+            } else if (str_eq(str_from_cstr(optarg), STR("share"))) {
+                db_storage = DB_STORAGE_SHARE;
+            } else {
+                usage(argv[0]);
+                return EX_USAGE;
+            }
             break;
         default:
             usage(argv[0]);
@@ -1214,7 +1228,7 @@ int main(int argc, char **argv) {
         fputs("arena exhausted\n", stderr);
         return EX_SOFTWARE;
     }
-    if (!db_global_init(db_heap, DB_HEAP_SIZE) || !db_prepare_file(db_path)) {
+    if (!db_global_init(db_heap, DB_HEAP_SIZE) || !db_prepare_file(db_path, db_storage)) {
         return EX_SOFTWARE;
     }
 
@@ -1263,7 +1277,7 @@ int main(int argc, char **argv) {
             perror("epoll_ctl");
             return EX_OSERR;
         }
-        if (!db_open(&w->db, db_path)) {
+        if (!db_open(&w->db, db_path, db_storage)) {
             return EX_SOFTWARE;
         }
         workers[i] = w;

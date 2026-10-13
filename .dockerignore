@@ -1,0 +1,6 @@
+# The production image needs only CMakeLists.txt, src/ and public/.
+# Keeping everything else out also keeps `az acr build` uploads small.
+*
+!CMakeLists.txt
+!src/
+!public/
