@@ -280,7 +280,10 @@ Descriptions may be up to 50,000 characters. Lists (`GET /api/recipes`) carry
 only an `excerpt`, the text of the first paragraph block, to stay small.
 
 **Images.** Upload images on the **Kuvat** page in the admin view (button, or
-drag files onto the page), or straight from the image picker in the editor.
+drag files onto the page), or straight from the image picker in the editor. The
+Kuvat page shows how many images there are and how much disk space their files
+take in total; clicking an image shows its details (name, file type, size,
+dimensions, upload date, use) in the panel beside the images.
 
 - The browser scales each image down to at most 1600 pixels on the longer side
   and saves it as JPEG before uploading. That keeps files small and removes the

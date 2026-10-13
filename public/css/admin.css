@@ -919,6 +919,40 @@ body.is-dragging-block {
   gap: 1rem;
 }
 
+/* Gallery page: images on the left, the details panel always on the right. */
+.gallery-summary {
+  margin: 0 0 1rem;
+  font-size: 0.95rem;
+  color: var(--color-text-muted);
+}
+
+.gallery-summary strong {
+  font-weight: 500;
+  color: var(--color-text);
+}
+
+.gallery-page-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 320px;
+  gap: 1.6rem;
+  align-items: start;
+}
+
+.gallery-page-images {
+  min-width: 0;
+}
+
+.gallery-page-info {
+  position: sticky;
+  top: calc(var(--header-height) + 16px);
+  max-height: calc(100vh - var(--header-height) - 32px);
+}
+
+.gallery-page-info .gallery-info-header h2 {
+  margin: 0;
+  font-size: 1.15rem;
+}
+
 .gallery-page-grid {
   grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
 }
@@ -932,8 +966,17 @@ body.is-dragging-block {
   overflow: hidden;
 }
 
+.gallery-card.is-selected {
+  border-color: var(--color-lilac-dark);
+  box-shadow: 0 0 0 1px var(--color-lilac-dark);
+}
+
 .gallery-card-image {
   display: block;
+  width: 100%;
+  padding: 0;
+  border: none;
+  cursor: pointer;
   aspect-ratio: 4 / 3;
   background: linear-gradient(135deg, var(--color-sage-light), var(--color-lilac-light));
 }
@@ -964,7 +1007,7 @@ body.is-dragging-block {
 
 .gallery-card-actions {
   display: flex;
-  justify-content: space-between;
+  justify-content: flex-end;
   padding: 0.3rem 0.4rem 0.5rem;
 }
 
@@ -1186,7 +1229,24 @@ body.is-dragging-block {
 
 .gallery-info-list dd {
   margin: 0;
-  overflow-wrap: anywhere;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* With no image chosen the panel keeps its shape: the hint sits in the preview. */
+.gallery-info-preview .gallery-info-hint {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  padding: 1rem;
+  text-align: center;
+}
+
+.gallery-info-list dd.is-empty {
+  color: var(--color-text-muted);
 }
 
 .gallery-info-actions {
@@ -1274,8 +1334,8 @@ body.is-dragging-block {
     grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
   }
 
-  /* On narrow screens the panel slides up when asked for. */
-  .gallery-info {
+  /* On narrow screens the picker's panel slides up when asked for. */
+  .gallery-dialog .gallery-info {
     position: absolute;
     left: 0;
     right: 0;
@@ -1289,12 +1349,36 @@ body.is-dragging-block {
     transition: transform 0.25s ease;
   }
 
-  .gallery-info.is-open {
+  .gallery-dialog .gallery-info.is-open {
     transform: translateY(0);
   }
 
-  .gallery-info-close {
+  .gallery-dialog .gallery-info-close {
     display: inline-block;
+  }
+}
+
+@media (max-width: 900px) {
+  /* Narrow screens: the panel stays above the images. */
+  .gallery-page-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .gallery-page-info {
+    position: static;
+    max-height: none;
+    order: -1;
+  }
+
+  .gallery-page-info .gallery-info-body {
+    display: grid;
+    grid-template-columns: 140px minmax(0, 1fr);
+    column-gap: 1rem;
+  }
+
+  .gallery-page-info .gallery-info-preview {
+    grid-row: span 2;
+    margin-bottom: 0;
   }
 }
 
@@ -1705,4 +1789,9 @@ body.is-dragging-block {
   .image-display-actions {
     padding: 0.8rem 1rem 1rem;
   }
+}
+
+.gallery-info-actions .btn.is-disabled {
+  opacity: 0.45;
+  pointer-events: none;
 }
