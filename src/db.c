@@ -5,88 +5,9 @@
 #include <unistd.h>
 
 #include "buddy.h"
+#include "migrate.h"
 
 static Buddy_Heap DB_HEAP;
-
-/*
- * Schema migrations, applied in order. PRAGMA user_version records how many
- * have run, and each one runs in its own transaction.
- *
- * The schema enforces the rules for every field, so invalid input from the
- * API surfaces as a constraint failure no matter which statement wrote it.
- */
-
-// 1: recipes, seeded with the site's original recipes.
-static char const MIGRATION_RECIPES[] =
-    "CREATE TABLE IF NOT EXISTS recipes ("
-    "    id          INTEGER PRIMARY KEY,"
-    "    name        TEXT NOT NULL"
-    "                CHECK (typeof(name) = 'text' AND length(trim(name)) BETWEEN 1 AND 200),"
-    "    image       TEXT NOT NULL"
-    "                CHECK (typeof(image) = 'text' AND length(image) <= 500),"
-    "    description TEXT NOT NULL"
-    "                CHECK (typeof(description) = 'text' AND length(description) <= 2000)"
-    ");"
-    "INSERT INTO recipes (name, image, description)"
-    " SELECT column1, column2, column3 FROM (VALUES"
-    " ('Laventelisaippua', '/assets/recipes/laventelisaippua.jpg',"
-    "  'Rauhoittava käsintehty saippua kuivalle iholle.'),"
-    " ('Yrttivoide kuivalle iholle', '/assets/recipes/yrttivoide.jpg',"
-    "  'Puutarhan yrteistä uutettu, hoitava perusvoide.'),"
-    " ('Kotitekoinen marjahillo', '/assets/recipes/marjahillo.jpg',"
-    "  'Kesän marjasadosta keitetty, vähäsokerinen hillo.'),"
-    " ('Ruusuvesitoner', '/assets/recipes/ruusuvesitoner.jpg',"
-    "  'Virkistävä kasvovesi tuoreista ruusunlehdistä.'),"
-    " ('Hapanjuurileipä', '/assets/recipes/hapanjuurileipa.jpg',"
-    "  'Rapeakuorinen leipä omalla juuritaikinalla.'),"
-    " ('Kalendulavoide', '/assets/recipes/kalendulavoide.jpg',"
-    "  'Ärsytystä lievittävä voide kehäkukan uutteesta.'),"
-    " ('Omena-kanelihillo', '/assets/recipes/omenahillo.jpg',"
-    "  'Syksyn omenista, kanelista ja tähtianiksesta.'),"
-    " ('Yrttisuola', '/assets/recipes/yrttisuola.jpg',"
-    "  'Kuivatuista yrteistä sekoitettu mauste-suola.'))"
-    " WHERE NOT EXISTS (SELECT 1 FROM recipes);";
-
-/*
- * 2: categories. Every recipe gets one; existing recipes go to Ruoanlaitto,
- * and the first Kosmetiikka recipe is added. SQLite cannot add a NOT NULL
- * foreign key column in place, so the recipes table is rebuilt.
- */
-static char const MIGRATION_CATEGORIES[] =
-    "CREATE TABLE categories ("
-    "    id   INTEGER PRIMARY KEY,"
-    "    name TEXT NOT NULL UNIQUE COLLATE NOCASE"
-    "         CHECK (typeof(name) = 'text' AND length(trim(name)) BETWEEN 1 AND 60)"
-    ");"
-    "INSERT INTO categories (name) VALUES ('Kosmetiikka'), ('Ruoanlaitto');"
-    "CREATE TABLE recipes_new ("
-    "    id          INTEGER PRIMARY KEY,"
-    "    category_id INTEGER NOT NULL REFERENCES categories (id) ON DELETE RESTRICT,"
-    "    name        TEXT NOT NULL"
-    "                CHECK (typeof(name) = 'text' AND length(trim(name)) BETWEEN 1 AND 200),"
-    "    image       TEXT NOT NULL"
-    "                CHECK (typeof(image) = 'text' AND length(image) <= 500),"
-    "    description TEXT NOT NULL"
-    "                CHECK (typeof(description) = 'text' AND length(description) <= 2000)"
-    ");"
-    "INSERT INTO recipes_new (id, category_id, name, image, description)"
-    " SELECT id, (SELECT id FROM categories WHERE name = 'Ruoanlaitto'), name, image, description"
-    " FROM recipes;"
-    "DROP TABLE recipes;"
-    "ALTER TABLE recipes_new RENAME TO recipes;"
-    "CREATE INDEX recipes_by_category ON recipes (category_id);"
-    "INSERT INTO recipes (category_id, name, image, description) VALUES ("
-    " (SELECT id FROM categories WHERE name = 'Kosmetiikka'),"
-    " 'Mehiläisvahahuulivoide', '/assets/recipes/huulivoide.jpg',"
-    " 'Pehmentävä huulivoide mehiläisvahasta, sheavoista ja kylmäpuristetusta"
-    " auringonkukkaöljystä. Valmistuu vartissa ja riittää koko talveksi.');";
-
-static char const *const MIGRATIONS[] = {
-    MIGRATION_RECIPES,
-    MIGRATION_CATEGORIES,
-};
-
-#define MIGRATION_COUNT ((int)(sizeof MIGRATIONS / sizeof MIGRATIONS[0]))
 
 // SQLite memory methods backed by the buddy heap.
 
@@ -183,31 +104,6 @@ static bool open_connection(sqlite3 **conn, char const *path, Db_Storage storage
     return exec(*conn, "PRAGMA synchronous = NORMAL; PRAGMA cache_size = -512;");
 }
 
-static bool read_user_version(sqlite3 *conn, int *version) {
-    sqlite3_stmt *stmt = NULL;
-    bool ok = sqlite3_prepare_v2(conn, "PRAGMA user_version", -1, &stmt, NULL) == SQLITE_OK &&
-              sqlite3_step(stmt) == SQLITE_ROW;
-    if (ok) {
-        *version = sqlite3_column_int(stmt, 0);
-    }
-    sqlite3_finalize(stmt);
-    return ok;
-}
-
-static bool run_migration(sqlite3 *conn, int index) {
-    char version_sql[64];
-    snprintf(version_sql, sizeof version_sql, "PRAGMA user_version = %d;", index + 1);
-    if (!exec(conn, "BEGIN IMMEDIATE;")) {
-        return false;
-    }
-    if (exec(conn, MIGRATIONS[index]) && exec(conn, version_sql) && exec(conn, "COMMIT;")) {
-        fprintf(stderr, "db: migrated schema to version %d\n", index + 1);
-        return true;
-    }
-    exec(conn, "ROLLBACK;");
-    return false;
-}
-
 /*
  * A crash while a lock is held leaves the lock directory behind, which would
  * block every later start. Wait briefly in case a live process (an old revision
@@ -228,7 +124,7 @@ static void clear_stale_lock(char const *path) {
     }
 }
 
-bool db_prepare_file(char const *path, Db_Storage storage) {
+bool db_prepare_file(char const *path, Db_Storage storage, char const *migrations_dir) {
     if (storage == DB_STORAGE_SHARE) {
         clear_stale_lock(path);
     }
@@ -241,15 +137,7 @@ bool db_prepare_file(char const *path, Db_Storage storage) {
                                                       : "PRAGMA journal_mode = DELETE;") &&
               exec(conn, "PRAGMA foreign_keys = OFF;");
 
-    int version = 0;
-    ok = ok && read_user_version(conn, &version);
-    if (ok && version > MIGRATION_COUNT) {
-        fprintf(stderr, "db: schema version %d is newer than this server knows\n", version);
-        ok = false;
-    }
-    for (int i = version; ok && i < MIGRATION_COUNT; i++) {
-        ok = run_migration(conn, i);
-    }
+    ok = ok && migrate(conn, migrations_dir);
 
     sqlite3_stmt *check = NULL;
     if (ok && sqlite3_prepare_v2(conn, "PRAGMA foreign_key_check", -1, &check, NULL) == SQLITE_OK &&

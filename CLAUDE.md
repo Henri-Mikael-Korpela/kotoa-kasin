@@ -46,6 +46,10 @@ Example single-line comment:
 
 - Place `const` always after the type name, e.g. `int const x = 0;`.
 
+## Strings
+
+- Use Str type for strings whenever possible, do not use `char*` or `char[]` for strings. Only when you need to use C string functions, use `char*` or `char[]` for strings.
+
 ## Structures
 
 - No single line struct initializer lists, split each field on its own line.

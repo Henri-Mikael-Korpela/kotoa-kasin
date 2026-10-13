@@ -15,8 +15,9 @@ RUN apk add --no-cache sqlite-libs \
  && mkdir /data
 COPY --from=build /src/build/kasin-httpd /usr/local/bin/kasin-httpd
 COPY public /srv/public
+COPY migrations /srv/migrations
 EXPOSE 8080
 # Two workers fit the smallest Container Apps size (0.25 vCPU, 0.5 GiB) with room
 # to spare. /data is an Azure Files share; SQLite cannot take POSIX file locks there, so
 # it locks with a ".lock" directory and keeps a rollback journal (-s share).
-CMD ["kasin-httpd", "-p", "8080", "-t", "2", "-r", "/srv/public", "-d", "/data/kotoa.db", "-s", "share"]
+CMD ["kasin-httpd", "-p", "8080", "-t", "2", "-r", "/srv/public", "-d", "/data/kotoa.db", "-m", "/srv/migrations", "-s", "share"]

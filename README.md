@@ -114,7 +114,7 @@ All in the resource group from `deploy/config.env` (default `kotoa-kasin`):
 - **Change the admin password.** The login is still the hard-coded
   `hanna` / `koti`, set as `ADMIN_USERNAME` and `ADMIN_PASSWORD` in
   `src/main.c`. Change them and deploy again before sharing the address.
-- **The database starts from the seeded recipes.** Recipes from your local
+- **The database starts from the seeded recipes** (migration `0002`). Recipes from your local
   database are not copied. It is stored on the file share with `-s share`
   (see Server options below).
 - **Sessions:** a random signing secret (`KASIN_JWT_SECRET`) is created on the
@@ -161,11 +161,56 @@ portal before deploying.
 | `deploy` reports no healthy answer at the end | Look at the log with `az containerapp logs show ... --follow`; the app may still be starting. |
 | `docker exec` says the container is not running | The tooling container is stopped. Start it with `docker compose -f dev.docker-compose.yml up -d`. |
 
+## Database migrations
+
+The database structure is defined by SQL files in `migrations/`, applied in
+order when the server starts:
+
+| File | Contents |
+|---|---|
+| `0001__create_recipe_tables.sql` | The `categories` and `recipes` tables |
+| `0002__seed_initial_recipes.sql` | Starter content: two categories and the original recipes |
+
+**Naming:** `<number>__<name>.sql`, for example `0003__add_servings_to_recipes.sql`:
+four digits, two underscores, then lowercase letters, digits and underscores.
+Other files in the directory are ignored.
+
+**How it works:**
+
+- Each migration runs once, in its own transaction. If it fails, nothing from
+  it is kept and the server does not start, so fix the file and restart.
+- Applied migrations are recorded in the `schema_migrations` table
+  (`version`, `name`, `applied_at`). The database's current version is the
+  highest `version` there.
+- Several servers starting at once (as during an Azure deployment) are safe:
+  one applies the migrations, the others wait and find nothing left to do.
+
+**Changing the schema:** add a new file with the next number. Do not edit,
+rename or renumber a file that has been applied anywhere. The server refuses
+to start if:
+
+- an applied migration's file was renamed or renumbered;
+- a new file has a number below the database's current version (two branches
+  both adding `0003`, say): renumber the new file above the current version;
+- the database is newer than the newest file (an older server, newer database).
+
+Migration files must not contain `BEGIN` or `COMMIT`. Foreign key enforcement
+is off while migrations run, so tables can be rebuilt; the server checks all
+foreign keys once they have finished.
+
+Locally, `docker compose -f dev.docker-compose.yml restart httpd` applies new
+migrations. On Azure, `deploy` copies `migrations/` into the image, and they
+run when the new version starts.
+
+Databases created before `migrations/` existed (schema version 2) are adopted
+on first start: `0001` and `0002` are recorded as applied without running.
+
 ## Project layout
 
 | Path | Contents |
 |---|---|
-| `src/` | The server: `main.c` (HTTP, routing, API), `db.c` (SQLite, migrations), `jwt.c`, `sha256.c`, `str.c`, `arena.c`, `buddy.c` |
+| `src/` | The server: `main.c` (HTTP, routing, API), `db.c` (SQLite), `migrate.c` (migration runner), `jwt.c`, `sha256.c`, `str.c`, `arena.c`, `buddy.c` |
+| `migrations/` | Database migrations, `<number>__<name>.sql` |
 | `public/` | The site: pages, `css/`, `js/`, `assets/`; `hallinta/` holds the admin pages |
 | `Dockerfile` | Production image (used for Azure) |
 | `Dockerfile.dev`, `dev.docker-compose.yml` | Local development and the deployment tooling container |
@@ -175,8 +220,11 @@ portal before deploying.
 ### Server options
 
 ```
-kasin-httpd [-p port] [-t threads] [-r docroot] [-d database] [-s local|share]
+kasin-httpd [-p port] [-t threads] [-r docroot] [-d database] [-m migrations] [-s local|share]
 ```
+
+`-m` names the migrations directory (default `migrations`, relative to the
+working directory).
 
 `-s share` is for a database on a network share such as Azure Files (used in
 the Azure deployment). SQLite cannot rely on POSIX file locks or WAL there, so

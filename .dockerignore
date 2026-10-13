@@ -1,6 +1,7 @@
-# The production image needs only CMakeLists.txt, src/ and public/.
+# The production image needs only CMakeLists.txt, src/, public/ and migrations/.
 # Keeping everything else out also keeps `az acr build` uploads small.
 *
 !CMakeLists.txt
 !src/
 !public/
+!migrations/

@@ -69,14 +69,15 @@ typedef struct {
 bool db_global_init(void *heap_mem, size_t heap_size);
 
 /**
- * Creates the database file if needed and migrates its schema to the current
- * version, seeding initial data on the way.
+ * Creates the database file if needed and applies the migrations in
+ * migrations_dir that it has not had yet (see migrate.h).
  *
  * @param path Database file.
  * @param storage Kind of storage the file lives on.
+ * @param migrations_dir Directory of <number>__<name>.sql migration files.
  * @return False on failure, after printing why.
  */
-bool db_prepare_file(char const *path, Db_Storage storage);
+bool db_prepare_file(char const *path, Db_Storage storage, char const *migrations_dir);
 
 /**
  * Opens a connection for the calling thread and prepares its statements.

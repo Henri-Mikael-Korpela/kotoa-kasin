@@ -1118,7 +1118,8 @@ static void on_signal(int sig) {
 
 static void usage(char const *argv0) {
     fprintf(stderr,
-            "usage: %s [-p port] [-t threads] [-r docroot] [-d database] [-s local|share]\n"
+            "usage: %s [-p port] [-t threads] [-r docroot] [-d database] [-m migrations] [-s local|share]\n"
+            "  -m  directory of <number>__<name>.sql migrations (default: migrations)\n"
             "  -s  where the database lives; use share for a network share such as Azure Files\n",
             argv0);
 }
@@ -1130,10 +1131,11 @@ int main(int argc, char **argv) {
     
     char const *root = NULL;
     char const *db_path = "kotoa.db";
+    char const *migrations_dir = "migrations";
     Db_Storage db_storage = DB_STORAGE_LOCAL;
     int opt;
     // CHECK What does getopt do?
-    while ((opt = getopt(argc, argv, "p:t:r:d:s:h")) != -1) {
+    while ((opt = getopt(argc, argv, "p:t:r:d:m:s:h")) != -1) {
         uint64_t value;
         switch (opt) {
         case 'p':
@@ -1155,6 +1157,9 @@ int main(int argc, char **argv) {
             break;
         case 'd':
             db_path = optarg;
+            break;
+        case 'm':
+            migrations_dir = optarg;
             break;
         case 's':
             if (str_eq(str_from_cstr(optarg), STR("local"))) {
@@ -1228,7 +1233,7 @@ int main(int argc, char **argv) {
         fputs("arena exhausted\n", stderr);
         return EX_SOFTWARE;
     }
-    if (!db_global_init(db_heap, DB_HEAP_SIZE) || !db_prepare_file(db_path, db_storage)) {
+    if (!db_global_init(db_heap, DB_HEAP_SIZE) || !db_prepare_file(db_path, db_storage, migrations_dir)) {
         return EX_SOFTWARE;
     }
 

@@ -25,6 +25,7 @@ add_executable(kasin-httpd
   src/buddy.c
   src/db.c
   src/jwt.c
+  src/migrate.c
   src/sha256.c
   src/str.c)
 target_compile_options(kasin-httpd PRIVATE -Wall -Wextra -Wpedantic)
