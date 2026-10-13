@@ -8,8 +8,8 @@
  * permanently. The heap never grows beyond the block it was given.
  */
 
-#ifndef BUDDY_H
-#define BUDDY_H
+#ifndef __KASIN_BUDDY_H__
+#define __KASIN_BUDDY_H__
 
 #include <pthread.h>
 #include <stdbool.h>
@@ -78,4 +78,4 @@ size_t buddy_usable_size(void const *ptr);
  */
 size_t buddy_round_up(Buddy_Heap const *heap, size_t size);
 
-#endif
+#endif  // __KASIN_BUDDY_H__

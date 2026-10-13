@@ -3,8 +3,8 @@
  * @brief SQLite helpers that take and return Str instead of C strings.
  */
 
-#ifndef SQL_H
-#define SQL_H
+#ifndef __KASIN_SQL_H__
+#define __KASIN_SQL_H__
 
 #include <sqlite3.h>
 #include <stdbool.h>
@@ -47,4 +47,4 @@ bool sql_bind_str(sqlite3_stmt *stmt, int index, Str value);
  */
 Str sql_column_str(sqlite3_stmt *stmt, int column);
 
-#endif
+#endif  // __KASIN_SQL_H__

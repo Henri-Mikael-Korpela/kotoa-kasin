@@ -3,8 +3,8 @@
  * @brief SHA-256 (FIPS 180-4) and HMAC-SHA256 (RFC 2104), no dependencies.
  */
 
-#ifndef SHA256_H
-#define SHA256_H
+#ifndef __KASIN_SHA256_H__
+#define __KASIN_SHA256_H__
 
 #include <stddef.h>
 #include <stdint.h>
@@ -40,4 +40,4 @@ void sha256_final(Sha256 *ctx, uint8_t out[SHA256_DIGEST_SIZE]);
 void hmac_sha256(void const *key, size_t key_len, void const *msg, size_t msg_len,
                  uint8_t out[SHA256_DIGEST_SIZE]);
 
-#endif
+#endif  // __KASIN_SHA256_H__

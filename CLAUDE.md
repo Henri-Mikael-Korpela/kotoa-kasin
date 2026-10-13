@@ -34,7 +34,23 @@ Example single-line comment:
 - Use SCREAMING_SNAKE_CASE for constants and global variables.
 - Use snake_case for functions and local variables.
 - Use Ada case for type names (e.g. `HTTP_Request`).
-- Never use __ or _ prefix for variables/functions/macros/types.
+- Never use __ or _ prefix for variables/functions/macros/types. The only exception is header guards (see Header files).
+
+## Header files
+
+- Every header file of own code has a header guard named `__KASIN_<NAME>_H__`, where `<NAME>` is the file name in SCREAMING_SNAKE_CASE without the extension, e.g. `__KASIN_STR_H__` for `str.h` and `__KASIN_HTTP_REQUEST_H__` for `http_request.h`. The `KASIN_` prefix marks the guard as belonging to this project.
+- Use `#ifndef` and `#define` with that name at the top of the file, and close the guard with `#endif` followed by a `//` comment that contains the name of the header guard.
+
+Example header guard:
+
+```c
+#ifndef __KASIN_STR_H__
+#define __KASIN_STR_H__
+
+// Declarations.
+
+#endif  // __KASIN_STR_H__
+```
 
 ## Scopes
 

@@ -13,8 +13,8 @@
  * adding a new file rather than editing an old one.
  */
 
-#ifndef MIGRATE_H
-#define MIGRATE_H
+#ifndef __KASIN_MIGRATE_H__
+#define __KASIN_MIGRATE_H__
 
 #include <sqlite3.h>
 #include <stdbool.h>
@@ -34,4 +34,4 @@
  */
 bool migrate(sqlite3 *conn, Str dir);
 
-#endif
+#endif  // __KASIN_MIGRATE_H__

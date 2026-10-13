@@ -9,8 +9,8 @@
  * A Str_Builder appends into a fixed caller-provided buffer and never grows.
  */
 
-#ifndef STR_H
-#define STR_H
+#ifndef __KASIN_STR_H__
+#define __KASIN_STR_H__
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -240,4 +240,4 @@ char const *str_builder_cstr(Str_Builder *b);
  */
 Str str_builder_str(Str_Builder const *b);
 
-#endif
+#endif  // __KASIN_STR_H__

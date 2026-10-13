@@ -7,8 +7,8 @@
  * the arena.
  */
 
-#ifndef ARENA_H
-#define ARENA_H
+#ifndef __KASIN_ARENA_H__
+#define __KASIN_ARENA_H__
 
 #include <stddef.h>
 #include <stdint.h>
@@ -47,4 +47,4 @@ void arena_init(Arena *arena, void *base, size_t capacity);
  */
 void *arena_alloc(Arena *arena, size_t size, size_t align);
 
-#endif
+#endif  // __KASIN_ARENA_H__

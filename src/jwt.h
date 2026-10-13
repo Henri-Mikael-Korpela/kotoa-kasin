@@ -7,8 +7,8 @@
  * algorithm confusion ("alg": "none" and friends).
  */
 
-#ifndef JWT_H
-#define JWT_H
+#ifndef __KASIN_JWT_H__
+#define __KASIN_JWT_H__
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -51,4 +51,4 @@ bool jwt_issue(Str_Builder *out, Str subject, int64_t issued_at, int64_t expires
  */
 bool jwt_verify(Str token, uint8_t const *key, size_t key_len, int64_t now, Jwt_Claims *claims);
 
-#endif
+#endif  // __KASIN_JWT_H__

@@ -11,8 +11,8 @@
  * take care of escaping.
  */
 
-#ifndef DB_H
-#define DB_H
+#ifndef __KASIN_DB_H__
+#define __KASIN_DB_H__
 
 #include <sqlite3.h>
 #include <stdbool.h>
@@ -162,4 +162,4 @@ Db_Status db_delete_category(Db *db, int64_t id);
  */
 Db_Status db_parse_login(Db *db, Str json, Str_Builder *username, Str_Builder *password);
 
-#endif
+#endif  // __KASIN_DB_H__
