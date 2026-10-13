@@ -595,6 +595,7 @@ function initEditPage() {
       if (reusable && reusable.length) {
         var old = reusable.shift();
         old.alt = img.alt;
+        old.style.cssText = img.style.cssText;  // The crop may have changed.
         img.replaceWith(old);
       }
     });

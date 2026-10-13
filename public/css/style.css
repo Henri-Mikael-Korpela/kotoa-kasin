@@ -905,12 +905,32 @@ a.recipe-tag:hover {
 }
 
 .block-image {
-  margin: 0;
+  margin: 0 auto;  /* A scaled-down image sits in the middle of the column. */
 }
 
 .block-image img {
   width: 100%;
   border-radius: 3px;
+}
+
+/*
+ * A cropped image: the frame has the crop's shape and the whole picture is
+ * placed inside it so that only the crop shows (sizes come from blocks.js).
+ */
+.block-image-frame {
+  position: relative;
+  overflow: hidden;
+  border-radius: 3px;
+}
+
+.block-image-frame img {
+  position: absolute;
+  max-width: none;
+  border-radius: 0;
+}
+
+.block-image .block-image-frame img {
+  border-radius: 0;
 }
 
 .block-image figcaption {

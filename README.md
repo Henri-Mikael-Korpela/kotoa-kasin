@@ -217,12 +217,18 @@ the admin view, in the spirit of WordPress Gutenberg:
 |---|---|---|
 | Paragraph | `paragraph` | none; line breaks are kept |
 | Title | `title` | `level`: 2, 3 or 4 (H2-H4; H1 is the recipe name) |
-| Image | `image` | `src` (image address), `alt` (description for screen readers), `caption` (optional) |
+| Image | `image` | `src` (image address), `alt` (description for screen readers), `caption` (optional); how it is shown: `crop` (`x`, `y`, `w`, `h` as fractions of the picture), `width` and `height` (the picture's pixel size, needed with a crop), `scale` (width on the page, 25-100 % of the text column) |
 | Layout | `layout` | two columns side by side; each holds a paragraph, title or image |
 
 Add blocks from the bar under the list, drag them by the ⠿ handle (mouse or
 touch) or move them with the arrow buttons, and remove them with ✕. In a layout
 block, ⇄ swaps the two columns.
+
+**Muokkaa kuvan esitystapaa** on an image block opens the image display editor: drag the
+frame's corners to crop, drag inside the frame (or use the arrow keys) to
+choose which part of the picture is centred, and set the image's size on the
+page with the slider. The uploaded file is never changed; the settings are
+stored as the block's options, and **Palauta alkuperäinen** removes them.
 
 A live preview shows the recipe as its public page will look, updated with
 every change to the name, category, cover image or blocks. On screens wider
