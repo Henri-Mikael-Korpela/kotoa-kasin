@@ -1848,3 +1848,93 @@ body.is-dragging-block {
     grid-column: 1 / -1;
   }
 }
+
+/* ---------------------------------------------------
+   Details panel: the title stays, the details scroll
+--------------------------------------------------- */
+
+.gallery-info {
+  overflow: hidden;
+}
+
+.gallery-info-header {
+  flex: none;
+}
+
+.gallery-info-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+/* ---------------------------------------------------
+   Gallery page: compact, and on desktop it fits the window
+--------------------------------------------------- */
+
+body[data-page="images"] .admin-main {
+  padding: 24px 0 32px;
+}
+
+body[data-page="images"] .admin-toolbar {
+  align-items: center;
+  margin-bottom: 0.7rem;
+}
+
+body[data-page="images"] .admin-toolbar h1 {
+  font-size: 1.8rem;
+}
+
+body[data-page="images"] .admin-toolbar p {
+  margin: 0.1em 0 0;
+}
+
+body[data-page="images"] .form-error:empty {
+  display: none;  /* Takes room only when there is a message. */
+}
+
+body[data-page="images"] .form-error {
+  margin: 0 0 0.5rem;
+}
+
+body[data-page="images"] .gallery-summary {
+  margin: 0 0 0.7rem;
+}
+
+@media (min-width: 901px) {
+  /* The page fills the window below the header and never scrolls itself. */
+  body[data-page="images"] .admin-main {
+    display: flex;
+    flex-direction: column;
+    height: calc(100vh - var(--header-height));
+    min-height: 0;
+    padding: 20px 0 20px;
+    overflow: hidden;
+  }
+
+  body[data-page="images"] .admin-main > .container {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+  }
+
+  body[data-page="images"] .gallery-page-layout {
+    flex: 1;
+    min-height: 0;
+    grid-template-rows: minmax(0, 1fr);
+    align-items: stretch;
+  }
+
+  /* The images and the details panel scroll on their own. */
+  body[data-page="images"] .gallery-page-images {
+    min-height: 0;
+    overflow-y: auto;
+    padding: 2px 6px 2px 2px;  /* Room for the selection outline and the scroll bar. */
+  }
+
+  body[data-page="images"] .gallery-page-info {
+    position: static;
+    max-height: none;
+    height: 100%;
+  }
+}
