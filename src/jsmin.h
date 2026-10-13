@@ -18,12 +18,8 @@
 #include <stdbool.h>
 #include <stddef.h>
 
+#include "minify.h"
 #include "str.h"
-
-typedef struct {
-    size_t line;     /**< 1-based line in the source where the problem was found. */
-    Str    message;  /**< What went wrong; points to static text. */
-} Js_Error;
 
 typedef struct {
     Str    name;  /**< The declared name, a slice of the source. */
@@ -40,7 +36,7 @@ typedef struct {
  *              expression, unbalanced braces) or the output does not fit.
  * @return True on success.
  */
-bool js_minify(Str source, Str_Builder *out, Js_Error *error);
+bool js_minify(Str source, Str_Builder *out, Minify_Error *error);
 
 /**
  * Lists the names a script declares at its top level with const, let, var,
@@ -55,6 +51,6 @@ bool js_minify(Str source, Str_Builder *out, Js_Error *error);
  *              there are more names than fit.
  * @return True on success.
  */
-bool js_top_level_names(Str source, Js_Name *names, size_t capacity, size_t *count, Js_Error *error);
+bool js_top_level_names(Str source, Js_Name *names, size_t capacity, size_t *count, Minify_Error *error);
 
 #endif  // __KASIN_JSMIN_H__

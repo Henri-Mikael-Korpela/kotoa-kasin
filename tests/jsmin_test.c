@@ -17,7 +17,7 @@ static void expect_minified(char const *input, char const *expected) {
     char buf[4096];
     Str_Builder out;
     str_builder_init(&out, buf, sizeof buf);
-    Js_Error error;
+    Minify_Error error;
     if (!js_minify(str_from_cstr(input), &out, &error)) {
         printf("FAIL %s\n  error on line %zu: %.*s\n", input, error.line, STR_ARG(error.message));
         FAILURES++;
@@ -33,7 +33,7 @@ static void expect_error(char const *input, size_t line, char const *message) {
     char buf[4096];
     Str_Builder out;
     str_builder_init(&out, buf, sizeof buf);
-    Js_Error error;
+    Minify_Error error;
     if (js_minify(str_from_cstr(input), &out, &error)) {
         printf("FAIL %s\n  minified without the expected error\n", input);
         FAILURES++;
@@ -48,7 +48,7 @@ static void expect_error(char const *input, size_t line, char const *message) {
 static void expect_names(char const *input, char const *expected) {
     Js_Name names[32];
     size_t count;
-    Js_Error error;
+    Minify_Error error;
     if (!js_top_level_names(str_from_cstr(input), names, 32, &count, &error)) {
         printf("FAIL %s\n  error on line %zu: %.*s\n", input, error.line, STR_ARG(error.message));
         FAILURES++;

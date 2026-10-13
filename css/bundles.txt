@@ -1,0 +1,17 @@
+# Style sheet bundles, built by kasin-cssbundle into public/css/<name>.css.
+#
+# Each bundle lists its source files in cascade order: later files win. A
+# bundle may use only files in shared/ and in the directory named after it, so
+# the admin styles never end up in the public site's style sheet.
+#
+# url() values are not rewritten: write them relative to /css/, where the
+# bundles are served.
+
+# Public pages: /, /reseptit/<slug>, /meista, /yhteystiedot.
+site:
+    shared/style.css
+
+# Admin pages under /hallinta: the site's styles, then the admin view's own.
+admin:
+    shared/style.css
+    admin/admin.css

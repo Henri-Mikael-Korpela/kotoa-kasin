@@ -11,17 +11,18 @@ COPY tests ./tests
 RUN cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
  && cmake --build build -j \
  && ctest --test-dir build --output-on-failure
-# The JavaScript bundles served from /js are built from js/ (see js/bundles.txt).
+# The bundles served from /js and /css are built from js/ and css/ (see their bundles.txt).
 COPY js ./js
-RUN mkdir bundles \
- && build/kasin-jsbundle -o bundles js/bundles.txt
+COPY css ./css
+RUN build/kasin-jsbundle -o bundles/js js/bundles.txt \
+ && build/kasin-cssbundle -o bundles/css css/bundles.txt
 
 FROM alpine:3.20
 RUN apk add --no-cache sqlite-libs \
  && mkdir /data
 COPY --from=build /src/build/kasin-httpd /usr/local/bin/kasin-httpd
 COPY public /srv/public
-COPY --from=build /src/bundles/ /srv/public/js/
+COPY --from=build /src/bundles/ /srv/public/
 COPY migrations /srv/migrations
 EXPOSE 8080
 # Two workers fit the smallest Container Apps size (0.25 vCPU, 0.5 GiB) with room

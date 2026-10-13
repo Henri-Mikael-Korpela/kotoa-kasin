@@ -42,13 +42,23 @@ target_compile_definitions(kasin-httpd PRIVATE
   DB_HEAP_SIZE=${KASIN_DB_HEAP_SIZE})
 target_link_libraries(kasin-httpd PRIVATE Threads::Threads SQLite::SQLite3)
 
-# Builds the JavaScript bundles in public/js from the sources in js/ (see js/bundles.txt).
+# Build the bundles in public/js and public/css from the sources in js/ and css/
+# (see js/bundles.txt and css/bundles.txt). bundler.c is what they share.
 add_executable(kasin-jsbundle
   src/jsbundle.c
   src/jsmin.c
+  src/bundler.c
   src/arena.c
   src/str.c)
 target_compile_options(kasin-jsbundle PRIVATE -Wall -Wextra -Wpedantic)
+
+add_executable(kasin-cssbundle
+  src/cssbundle.c
+  src/cssmin.c
+  src/bundler.c
+  src/arena.c
+  src/str.c)
+target_compile_options(kasin-cssbundle PRIVATE -Wall -Wextra -Wpedantic)
 
 enable_testing()
 add_executable(jsmin-test
@@ -57,3 +67,10 @@ add_executable(jsmin-test
   src/str.c)
 target_compile_options(jsmin-test PRIVATE -Wall -Wextra -Wpedantic)
 add_test(NAME jsmin COMMAND jsmin-test)
+
+add_executable(cssmin-test
+  tests/cssmin_test.c
+  src/cssmin.c
+  src/str.c)
+target_compile_options(cssmin-test PRIVATE -Wall -Wextra -Wpedantic)
+add_test(NAME cssmin COMMAND cssmin-test)

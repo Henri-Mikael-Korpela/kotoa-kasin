@@ -43,7 +43,7 @@ typedef struct {
     Token      prev;  /**< The last token returned, to tell a regular expression from a division. */
     uint8_t    braces[MAX_BRACE_DEPTH];
     size_t     brace_depth;
-    Js_Error  *error;
+    Minify_Error  *error;
 } Lexer;
 
 typedef struct {
@@ -54,7 +54,7 @@ typedef struct {
     size_t       paren_depth;
     Token        pending;            /**< A ";" or "," held back until the next token shows whether it is needed. */
     bool         has_pending;
-    Js_Error    *error;
+    Minify_Error    *error;
 } Emitter;
 
 /**
@@ -205,7 +205,7 @@ static size_t line_of(Str s, size_t offset) {
     return line;
 }
 
-static bool fail(Js_Error *error, Str source, size_t offset, Str message) {
+static bool fail(Minify_Error *error, Str source, size_t offset, Str message) {
     error->line = line_of(source, offset);
     error->message = message;
     return false;
@@ -494,7 +494,7 @@ static bool lex_next(Lexer *lx, Token *token) {
     return true;
 }
 
-static void lexer_init(Lexer *lx, Str source, Js_Error *error) {
+static void lexer_init(Lexer *lx, Str source, Minify_Error *error) {
     lx->source = source;
     lx->pos = 0;
     lx->prev = (Token) {
@@ -642,7 +642,7 @@ static bool emit(Emitter *e, Token const *t) {
     return t->kind == TOKEN_END || write_token(e, t);
 }
 
-bool js_minify(Str source, Str_Builder *out, Js_Error *error) {
+bool js_minify(Str source, Str_Builder *out, Minify_Error *error) {
     Lexer lx;
     lexer_init(&lx, source, error);
     Emitter e = {
@@ -666,7 +666,7 @@ bool js_minify(Str source, Str_Builder *out, Js_Error *error) {
 
 // Top-level declarations.
 
-static bool add_name(Js_Name *names, size_t capacity, size_t *count, Str source, Token const *t, Js_Error *error) {
+static bool add_name(Js_Name *names, size_t capacity, size_t *count, Str source, Token const *t, Minify_Error *error) {
     if (*count == capacity) {
         return fail(error, source, t->offset, STR("too many top-level names"));
     }
@@ -678,7 +678,7 @@ static bool add_name(Js_Name *names, size_t capacity, size_t *count, Str source,
     return true;
 }
 
-bool js_top_level_names(Str source, Js_Name *names, size_t capacity, size_t *count, Js_Error *error) {
+bool js_top_level_names(Str source, Js_Name *names, size_t capacity, size_t *count, Minify_Error *error) {
     Lexer lx;
     lexer_init(&lx, source, error);
     *count = 0;
