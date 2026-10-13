@@ -352,6 +352,6 @@ Reading is public; changes need a login token (`Authorization: Bearer <token>`).
 | `GET /api/recipes/slug/{slug}` | Read a recipe by its slug |
 | `GET`, `POST /api/categories` | List (alphabetical), create (`name`) |
 | `GET`, `PUT`, `DELETE /api/categories/{id}` | Read, rename, delete (409 while recipes use it) |
-| `GET /api/images` | List uploaded images with how many recipes use each (login required) |
+| `GET /api/images` | List uploaded images with how many recipes use each (`used`) and which ones (`recipes`: `{id, name}`, alphabetically) (login required) |
 | `POST /api/images` | Upload: the raw JPEG, PNG, GIF or WebP file as the body, original name in `X-File-Name` (login required) |
 | `DELETE /api/images/{id}` | Delete (login required; 409 while a recipe shows it) |

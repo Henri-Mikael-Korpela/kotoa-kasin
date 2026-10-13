@@ -1795,3 +1795,56 @@ body.is-dragging-block {
   opacity: 0.45;
   pointer-events: none;
 }
+
+/* Gallery page: the recipes that use the chosen image. A fixed height that
+   scrolls keeps the layout still however many there are. */
+.gallery-info-recipes {
+  margin-top: 1.1rem;
+  padding-top: 0.9rem;
+  border-top: 1px solid rgba(43, 42, 37, 0.08);
+}
+
+.gallery-info-recipes-title {
+  margin: 0 0 0.4rem;
+  font-size: 0.72rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--color-lilac-dark);
+}
+
+.gallery-info-recipe-list {
+  height: 6.6rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  overflow-y: auto;
+}
+
+.gallery-info-recipe-list li {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.9rem;
+  line-height: 2.2;
+}
+
+.gallery-info-recipe-list li.is-empty {
+  color: var(--color-text-muted);
+}
+
+.gallery-info-recipe-list a {
+  color: var(--color-text);
+  border-bottom: 1px solid rgba(43, 42, 37, 0.25);
+}
+
+.gallery-info-recipe-list a:hover,
+.gallery-info-recipe-list a:focus-visible {
+  color: var(--color-lilac-dark);
+  border-bottom-color: currentColor;
+}
+
+@media (max-width: 900px) {
+  .gallery-page-info .gallery-info-recipes {
+    grid-column: 1 / -1;
+  }
+}

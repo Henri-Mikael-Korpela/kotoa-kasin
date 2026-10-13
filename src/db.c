@@ -206,9 +206,15 @@ bool db_prepare_file(Str path, Db_Storage storage, Str migrations_dir) {
 
 // Where an image is served from, and how many recipes show it.
 #define IMAGE_URL "('/uploads/' || i.id || '.' || i.extension)"
+#define IMAGE_IS_USED_BY_RECIPE                                          \
+    " WHERE image = " IMAGE_URL " OR instr(description, " IMAGE_URL ") > 0"
 #define IMAGE_USE_COUNT                                                  \
-    "(SELECT count(*) FROM recipes"                                      \
-    " WHERE image = " IMAGE_URL " OR instr(description, " IMAGE_URL ") > 0)"
+    "(SELECT count(*) FROM recipes" IMAGE_IS_USED_BY_RECIPE ")"
+
+// The recipes that show an image, by name, as a JSON array of {id, name}.
+#define IMAGE_RECIPES                                                    \
+    "(SELECT json_group_array(json_object('id', u.id, 'name', u.name)) FROM" \
+    " (SELECT id, name FROM recipes" IMAGE_IS_USED_BY_RECIPE " ORDER BY name) u)"
 
 #define CATEGORY_JSON                                                    \
     "json_object('id', c.id, 'name', c.name, 'recipe_count',"            \
@@ -292,7 +298,8 @@ bool db_open(Db *db, Str path, Db_Storage storage) {
                 STR("SELECT json_group_array(json(image)) FROM ("
                 " SELECT json_object('id', i.id, 'url', " IMAGE_URL ","
                 " 'original_name', i.original_name, 'size', i.size,"
-                " 'created_at', i.created_at, 'used', " IMAGE_USE_COUNT ") AS image"
+                " 'created_at', i.created_at, 'used', " IMAGE_USE_COUNT ","
+                " 'recipes', json(" IMAGE_RECIPES ")) AS image"
                 " FROM images i ORDER BY i.id DESC)")) &&
         prepare(db, &db->find_image,
                 STR("SELECT i.extension, " IMAGE_USE_COUNT " FROM images i WHERE i.id = ?1")) &&

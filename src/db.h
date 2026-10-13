@@ -179,8 +179,8 @@ Db_Status db_delete_category(Db *db, int64_t id);
 
 /**
  * Appends all uploaded images, newest first, as a JSON array of
- * {id, url, original_name, size, created_at, used}, where used counts the
- * recipes that show the image.
+ * {id, url, original_name, size, created_at, used, recipes}, where used counts
+ * the recipes that show the image and recipes lists them as {id, name}.
  */
 Db_Status db_list_images_json(Db *db, Str_Builder *out);
 

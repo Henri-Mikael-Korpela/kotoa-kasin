@@ -173,9 +173,9 @@ var KasinGallery = (function () {
    * The details of one image: a preview, its facts and the caller's buttons.
    * With no image the same layout is shown empty (a hint in the preview,
    * dashes for the facts, the buttons disabled), so nothing moves when an
-   * image is chosen.
+   * image is chosen. extra, if given, goes below the buttons.
    */
-  function renderInfo(container, image, actions, hint) {
+  function renderInfo(container, image, actions, hint, extra) {
     var preview = document.createElement('div');
     preview.className = 'gallery-info-preview';
     var img = null;
@@ -226,6 +226,9 @@ var KasinGallery = (function () {
     buttons.className = 'gallery-info-actions';
     buttons.append.apply(buttons, actions);
     container.replaceChildren(preview, list, buttons);
+    if (extra) {
+      container.appendChild(extra);
+    }
   }
 
   // The delete button of a details panel; disabled when there is nothing to delete.
@@ -573,6 +576,36 @@ var KasinGallery = (function () {
 
   // The gallery page.
 
+  // The recipes that show an image, each linking to its edit page.
+  function usedInRecipes(image) {
+    var section = document.createElement('div');
+    section.className = 'gallery-info-recipes';
+    var title = document.createElement('p');
+    title.className = 'gallery-info-recipes-title';
+    title.textContent = 'Käytössä resepteissä';
+    var list = document.createElement('ul');
+    list.className = 'gallery-info-recipe-list';
+    var recipes = image && Array.isArray(image.recipes) ? image.recipes : [];
+    if (recipes.length === 0) {
+      var none = document.createElement('li');
+      none.className = 'is-empty';
+      none.textContent = image ? 'Ei yhdessäkään reseptissä.' : '–';
+      list.appendChild(none);
+    }
+    recipes.forEach(function (recipe) {
+      var item = document.createElement('li');
+      var link = document.createElement('a');
+      link.href = '/hallinta/resepti?id=' + encodeURIComponent(recipe.id);
+      link.target = '_blank';
+      link.textContent = recipe.name;
+      link.title = 'Muokkaa reseptiä ' + recipe.name;
+      item.appendChild(link);
+      list.appendChild(item);
+    });
+    section.append(title, list);
+    return section;
+  }
+
   function createGalleryCard(image, onSelect, onDelete) {
     var card = document.createElement('li');
     card.className = 'gallery-card';
@@ -655,7 +688,7 @@ var KasinGallery = (function () {
       });
       renderInfo(infoBody, image, [open, remove], images.length > 0
         ? 'Napsauta kuvaa nähdäksesi sen tiedot.'
-        : 'Ei vielä kuvia.');
+        : 'Ei vielä kuvia.', usedInRecipes(image));
     }
 
     function select(image) {

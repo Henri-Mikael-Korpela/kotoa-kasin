@@ -1047,7 +1047,7 @@ static void api_get_recipe_by_slug(Worker *w, Conn *c, Request const *r, Str slu
  *   PUT    /api/categories/{id}   (auth) {name} -> {id}, or 409 if the name is taken
  *   DELETE /api/categories/{id}   (auth) -> {id}, or 409 while recipes use it
  *
- *   GET    /api/images            (auth) -> [{id, url, original_name, size, created_at, used}, ...]
+ *   GET    /api/images            (auth) -> [{id, url, original_name, size, created_at, used, recipes}, ...]
  *   POST   /api/images            (auth) raw JPEG/PNG/GIF/WebP body, X-File-Name -> 201 {id, url}
  *   DELETE /api/images/{id}       (auth) -> {id}, or 409 while a recipe shows it
  */
