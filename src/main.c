@@ -438,11 +438,11 @@ static int open_in_root(Str rel_path, struct stat *st) {
  * Writes the response head and keeps the file open so its body can be streamed
  * with sendfile(), whatever its size. Takes ownership of fd.
  */
-static void send_file(Conn *c, int fd, struct stat const *st, Str mime, bool head_only,
+static void send_file(Conn *c, int status, int fd, struct stat const *st, Str mime, bool head_only,
                       Str extra_headers) {
     Str_Builder hdr;
     str_builder_init(&hdr, (char *)c->out, c->out_cap);
-    write_head(&hdr, c, 200, mime, (uint64_t)st->st_size, extra_headers);
+    write_head(&hdr, c, status, mime, (uint64_t)st->st_size, extra_headers);
     if (hdr.overflow) {
         close(fd);
         respond_error(c, 500, head_only);
@@ -466,7 +466,7 @@ static void send_file(Conn *c, int fd, struct stat const *st, Str mime, bool hea
  * Clean URLs are supported: a directory serves its index.html, and a missing
  * path without an extension falls back to the same path plus ".html".
  */
-static void serve_file(Conn *c, Str rel_path, bool head_only, bool is_root) {
+static void serve_file(Conn *c, int status, Str rel_path, bool head_only, bool is_root) {
     char path_buf[MAX_PATH_LEN];
     Str_Builder path;
     str_builder_init(&path, path_buf, sizeof path_buf);
@@ -494,7 +494,7 @@ static void serve_file(Conn *c, Str rel_path, bool head_only, bool is_root) {
         }
         return;
     }
-    send_file(c, fd, &st, mime_for(str_builder_str(&path)), head_only, STR(""));
+    send_file(c, status, fd, &st, mime_for(str_builder_str(&path)), head_only, STR(""));
 }
 
 /**
@@ -520,7 +520,7 @@ static void serve_upload(Conn *c, Str file_name, bool head_only) {
         respond_error(c, 404, head_only);
         return;
     }
-    send_file(c, fd, &st, mime_for(file_name), head_only,
+    send_file(c, 200, fd, &st, mime_for(file_name), head_only,
               STR("Cache-Control: public, max-age=31536000, immutable\r\n"));
 }
 
@@ -1009,16 +1009,36 @@ static bool handle_resource(Worker *w, Conn *c, Request const *r, Resource const
     return true;
 }
 
+static void api_get_recipe_by_slug(Worker *w, Conn *c, Request const *r, Str slug) {
+    Str_Builder body;
+    body_begin(c, &body);
+    Db_Status status = db_get_recipe_by_slug_json(&w->db, slug, &body);
+    if (status == DB_TOO_LARGE && big_acquire(w, c)) {
+        c->out = c->big;
+        c->out_cap = BIG_BUF_SIZE;
+        body_begin(c, &body);
+        status = db_get_recipe_by_slug_json(&w->db, slug, &body);
+    }
+    if (status != DB_OK) {
+        respond_db_error(c, status);
+        return;
+    }
+    respond_built(c, 200, JSON_TYPE, &body, r->head_only, NO_STORE);
+}
+
 /**
  * Routes requests under /api/.
  *
  *   POST   /api/login             {username, password} -> {token, expires_at}
  *   GET    /api/session           (auth) -> {username, expires_at}
  *
- *   GET    /api/recipes           -> [{id, name, image, excerpt, category_id, category}, ...]
- *   POST   /api/recipes           (auth) {name, image, description, category_id} -> 201 {id}
- *   GET    /api/recipes/{id}      -> {id, name, image, description, category_id, category}
- *   PUT    /api/recipes/{id}      (auth) {name, image, description, category_id} -> {id}
+ *   GET    /api/recipes           -> [{id, slug, name, image, excerpt, category_id, category}, ...]
+ *   POST   /api/recipes           (auth) {slug, name, image, description, category_id} -> 201 {id},
+ *                                 or 409 if another recipe has the slug
+ *   GET    /api/recipes/{id}      -> {id, slug, name, image, description, category_id, category}
+ *   GET    /api/recipes/slug/{slug} -> the same, found by slug
+ *   PUT    /api/recipes/{id}      (auth) {slug, name, image, description, category_id} -> {id},
+ *                                 or 409 if another recipe has the slug
  *   DELETE /api/recipes/{id}      (auth) -> {id}
  *
  *   GET    /api/categories        -> [{id, name, recipe_count}, ...] alphabetically
@@ -1043,6 +1063,15 @@ static void handle_api(Worker *w, Conn *c, Request const *r) {
     if (str_eq(r->path, STR("/api/session"))) {
         if (str_eq(r->method, STR("GET")) || r->head_only) {
             api_session(c, r);
+        } else {
+            respond_method_not_allowed(c, STR("Cache-Control: no-store\r\nAllow: GET, HEAD\r\n"));
+        }
+        return;
+    }
+    Str by_slug = STR("/api/recipes/slug/");
+    if (str_starts_with(r->path, by_slug)) {
+        if (str_eq(r->method, STR("GET")) || r->head_only) {
+            api_get_recipe_by_slug(w, c, r, str_slice(r->path, by_slug.len, r->path.len));
         } else {
             respond_method_not_allowed(c, STR("Cache-Control: no-store\r\nAllow: GET, HEAD\r\n"));
         }
@@ -1181,6 +1210,23 @@ static int build_response(Worker *w, Conn *c) {
         goto done;
     }
 
+    /*
+     * Recipe pages, /recipes/<slug>: one page shows every recipe and loads it
+     * by the slug in its address. An unknown slug still gets the page (which
+     * says so), but with status 404.
+     */
+    Str recipes_prefix = STR("/recipes/");
+    if (str_starts_with(r.path, recipes_prefix)) {
+        Str slug = str_slice(r.path, recipes_prefix.len, r.path.len);
+        bool exists = false;
+        if (slug.len > 0 && str_find_char(slug, '/') == STR_NPOS &&
+            db_recipe_slug_exists(&w->db, slug, &exists) != DB_OK) {
+            exists = true;  // The page reports any database trouble itself.
+        }
+        serve_file(c, exists ? 200 : 404, STR("resepti.html"), r.head_only, false);
+        goto done;
+    }
+
     if (str_starts_with(r.path, STR("/uploads/"))) {
         serve_upload(c, str_slice(r.path, 9, r.path.len), r.head_only);
         goto done;
@@ -1200,7 +1246,7 @@ static int build_response(Worker *w, Conn *c) {
         str_builder_append(&path, STR("index.html"));
     }
 
-    serve_file(c, str_builder_str(&path), r.head_only, rel.len == 0);
+    serve_file(c, 200, str_builder_str(&path), r.head_only, rel.len == 0);
 
 done:
     if (c->big && c->in == c->big) {

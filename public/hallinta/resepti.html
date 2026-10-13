@@ -41,6 +41,17 @@
           </div>
 
           <div class="form-field">
+            <label for="recipeSlug">Osoite</label>
+            <div class="slug-field">
+              <span class="slug-prefix" aria-hidden="true">/recipes/</span>
+              <input id="recipeSlug" type="text" maxlength="100" required spellcheck="false" autocapitalize="none"
+                pattern="[a-z0-9]+(-[a-z0-9]+)*" aria-describedby="slugHint">
+            </div>
+            <p class="form-hint" id="slugHint">Reseptin sivun osoite: pienet kirjaimet a&ndash;z, numerot ja väliviivat.
+              Syntyy nimestä, kunnes muokkaat sitä itse. <a id="recipePageLink" href="#" target="_blank" rel="noopener" hidden>Avaa sivu</a></p>
+          </div>
+
+          <div class="form-field">
             <label for="recipeCategory">Kategoria</label>
             <select id="recipeCategory" required>
               <option value="">Ladataan kategorioita&hellip;</option>

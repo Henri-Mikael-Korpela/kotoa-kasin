@@ -179,7 +179,7 @@ bool db_prepare_file(Str path, Db_Storage storage, Str migrations_dir) {
 
 // Columns of a recipe joined with its category, in the shape the API returns.
 #define RECIPE_JSON                                                      \
-    "json_object('id', r.id, 'name', r.name, 'image', r.image,"          \
+    "json_object('id', r.id, 'slug', r.slug, 'name', r.name, 'image', r.image," \
     " 'description', r.description, 'category_id', c.id, 'category', c.name)"
 
 /*
@@ -201,7 +201,7 @@ bool db_prepare_file(Str path, Db_Storage storage, Str migrations_dir) {
 
 // Columns of a recipe in list views.
 #define RECIPE_SUMMARY_JSON                                              \
-    "json_object('id', r.id, 'name', r.name, 'image', r.image,"          \
+    "json_object('id', r.id, 'slug', r.slug, 'name', r.name, 'image', r.image," \
     " 'excerpt', " RECIPE_EXCERPT ", 'category_id', c.id, 'category', c.name)"
 
 // Where an image is served from, and how many recipes show it.
@@ -224,6 +224,8 @@ bool db_open(Db *db, Str path, Db_Storage storage) {
         .is_json_object = NULL,
         .list_recipes = NULL,
         .get_recipe = NULL,
+        .get_recipe_by_slug = NULL,
+        .find_recipe_slug = NULL,
         .insert_recipe = NULL,
         .update_recipe = NULL,
         .delete_recipe = NULL,
@@ -252,9 +254,14 @@ bool db_open(Db *db, Str path, Db_Storage storage) {
         prepare(db, &db->get_recipe,
                 STR("SELECT " RECIPE_JSON
                 " FROM recipes r JOIN categories c ON c.id = r.category_id WHERE r.id = ?1")) &&
+        prepare(db, &db->get_recipe_by_slug,
+                STR("SELECT " RECIPE_JSON
+                " FROM recipes r JOIN categories c ON c.id = r.category_id WHERE r.slug = ?1")) &&
+        prepare(db, &db->find_recipe_slug, STR("SELECT 1 FROM recipes WHERE slug = ?1")) &&
         prepare(db, &db->insert_recipe,
-                STR("INSERT INTO recipes (category_id, name, image, description) VALUES ("
+                STR("INSERT INTO recipes (category_id, slug, name, image, description) VALUES ("
                 INTEGER_FIELD("1", "category_id") ", "
+                TEXT_FIELD("1", "slug", "NULL") ", "
                 TEXT_FIELD("1", "name", "NULL") ", "
                 TEXT_FIELD("1", "image", "''") ", "
                 TEXT_FIELD("1", "description", "''") ")"
@@ -262,6 +269,7 @@ bool db_open(Db *db, Str path, Db_Storage storage) {
         prepare(db, &db->update_recipe,
                 STR("UPDATE recipes SET"
                 " category_id = " INTEGER_FIELD("2", "category_id") ","
+                " slug = " TEXT_FIELD("2", "slug", "NULL") ","
                 " name = " TEXT_FIELD("2", "name", "NULL") ","
                 " image = " TEXT_FIELD("2", "image", "''") ","
                 " description = " TEXT_FIELD("2", "description", "''")
@@ -304,6 +312,8 @@ void db_close(Db *db) {
     sqlite3_finalize(db->is_json_object);
     sqlite3_finalize(db->list_recipes);
     sqlite3_finalize(db->get_recipe);
+    sqlite3_finalize(db->get_recipe_by_slug);
+    sqlite3_finalize(db->find_recipe_slug);
     sqlite3_finalize(db->insert_recipe);
     sqlite3_finalize(db->update_recipe);
     sqlite3_finalize(db->delete_recipe);
@@ -340,6 +350,14 @@ static Db_Status status_from(int rc) {
  * other constraint (a duplicate name, or a delete that recipes still restrict,
  * which SQLite may report with more than one extended code) is a conflict.
  */
+/*
+ * For recipe writes, a slug another recipe has is a conflict. A category that
+ * does not exist is invalid input, as is any other failed constraint.
+ */
+static Db_Status recipe_status_from(int rc) {
+    return rc == SQLITE_CONSTRAINT_UNIQUE ? DB_CONFLICT : status_from(rc);
+}
+
 static Db_Status category_status_from(int rc) {
     if ((rc & 0xff) == SQLITE_CONSTRAINT && rc != SQLITE_CONSTRAINT_CHECK &&
         rc != SQLITE_CONSTRAINT_NOTNULL) {
@@ -450,13 +468,37 @@ Db_Status db_get_recipe_json(Db *db, int64_t id, Str_Builder *out) {
     return get_json(db->get_recipe, id, out);
 }
 
-// A recipe pointing at a missing category is invalid input, not a conflict.
+Db_Status db_get_recipe_by_slug_json(Db *db, Str slug, Str_Builder *out) {
+    if (!sql_bind_str(db->get_recipe_by_slug, 1, slug)) {
+        finish(db->get_recipe_by_slug);
+        return DB_ERROR;
+    }
+    return append_text_result(db->get_recipe_by_slug, out);
+}
+
+Db_Status db_recipe_slug_exists(Db *db, Str slug, bool *exists) {
+    sqlite3_stmt *stmt = db->find_recipe_slug;
+    Db_Status status = DB_OK;
+    if (!sql_bind_str(stmt, 1, slug)) {
+        status = DB_ERROR;
+    } else {
+        int rc = sqlite3_step(stmt);
+        if (rc == SQLITE_ROW || rc == SQLITE_DONE) {
+            *exists = rc == SQLITE_ROW;
+        } else {
+            status = status_from(rc);
+        }
+    }
+    finish(stmt);
+    return status;
+}
+
 Db_Status db_create_recipe(Db *db, Str json, int64_t *id) {
-    return insert_from_json(db, db->insert_recipe, json, id, status_from);
+    return insert_from_json(db, db->insert_recipe, json, id, recipe_status_from);
 }
 
 Db_Status db_update_recipe(Db *db, int64_t id, Str json) {
-    return update_from_json(db, db->update_recipe, id, json, status_from);
+    return update_from_json(db, db->update_recipe, id, json, recipe_status_from);
 }
 
 Db_Status db_delete_recipe(Db *db, int64_t id) {

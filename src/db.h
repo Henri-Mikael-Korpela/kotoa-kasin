@@ -47,6 +47,8 @@ typedef struct {
     sqlite3_stmt *is_json_object;
     sqlite3_stmt *list_recipes;
     sqlite3_stmt *get_recipe;
+    sqlite3_stmt *get_recipe_by_slug;
+    sqlite3_stmt *find_recipe_slug;
     sqlite3_stmt *insert_recipe;
     sqlite3_stmt *update_recipe;
     sqlite3_stmt *delete_recipe;
@@ -98,7 +100,7 @@ void db_close(Db *db);
 
 /**
  * Appends all recipes as a JSON array of
- * {id, name, image, excerpt, category_id, category}. The excerpt is plain text
+ * {id, slug, name, image, excerpt, category_id, category}. The excerpt is plain text
  * from the start of the description (its first paragraph block), so the list
  * stays small however long the descriptions are.
  */
@@ -110,15 +112,30 @@ Db_Status db_list_recipes_json(Db *db, Str_Builder *out);
 Db_Status db_get_recipe_json(Db *db, int64_t id, Str_Builder *out);
 
 /**
- * Inserts a recipe from a JSON object with name, image, description and
+ * Appends the recipe with the given slug as a JSON object.
+ */
+Db_Status db_get_recipe_by_slug_json(Db *db, Str slug, Str_Builder *out);
+
+/**
+ * Checks whether a recipe has the given slug.
+ *
+ * @param exists Receives the answer.
+ */
+Db_Status db_recipe_slug_exists(Db *db, Str slug, bool *exists);
+
+/**
+ * Inserts a recipe from a JSON object with slug, name, image, description and
  * category_id. The category must exist.
  *
  * @param id Receives the new recipe's id.
+ * @return DB_CONFLICT when another recipe has the slug.
  */
 Db_Status db_create_recipe(Db *db, Str json, int64_t *id);
 
 /**
  * Replaces a recipe's fields from a JSON object like db_create_recipe() takes.
+ *
+ * @return DB_CONFLICT when another recipe has the slug.
  */
 Db_Status db_update_recipe(Db *db, int64_t id, Str json);
 

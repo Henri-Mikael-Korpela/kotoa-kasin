@@ -133,7 +133,7 @@ function showCategoryFilter(category) {
 }
 
 function recipeUrl(recipe) {
-  return '/resepti?id=' + encodeURIComponent(recipe.id);
+  return '/recipes/' + encodeURIComponent(recipe.slug);
 }
 
 function createRecipeCard(recipe) {
@@ -200,17 +200,30 @@ function loadRecipes(grid, categoryFilter) {
     });
 }
 
-// Recipe page (/resepti?id=...).
+// Recipe page: /recipes/<slug>. The older /resepti?id=<id> addresses still
+// work and are switched to the slug address.
+
+function recipeRequest() {
+  var match = /^\/recipes\/([^/]+)$/.exec(window.location.pathname);
+  if (match) {
+    return '/api/recipes/slug/' + match[1];
+  }
+  var id = new URLSearchParams(window.location.search).get('id');
+  return id ? '/api/recipes/' + encodeURIComponent(id) : null;
+}
 
 function loadRecipePage(page) {
-  var id = new URLSearchParams(window.location.search).get('id');
   var status = document.getElementById('recipeStatus');
-  if (!id) {
+  var request = recipeRequest();
+  if (!request) {
     status.textContent = 'Reseptiä ei löytynyt.';
     return;
   }
-  fetchJson('/api/recipes/' + encodeURIComponent(id))
+  fetchJson(request)
     .then(function (recipe) {
+      if (window.location.pathname !== recipeUrl(recipe)) {
+        window.history.replaceState(null, '', recipeUrl(recipe));
+      }
       document.title = recipe.name + ' — Kotoa käsin';
       var tag = document.getElementById('recipeCategory');
       tag.href = categoryUrl(recipe.category);

@@ -7,8 +7,10 @@ from an admin view at `/hallinta`.
 - **Server:** C, Linux only. epoll, one worker per thread, all memory reserved
   at startup, no `malloc` in the request path. Uses SQLite as its only library.
 - **Site:** static pages in `public/`; the front page loads recipes from the API.
-- **Recipe pages:** every recipe has a page at `/resepti?id=<id>`, built from
-  the blocks of its description.
+- **Recipe pages:** every recipe has a page at `/recipes/<slug>`, built from
+  the blocks of its description. The slug is the recipe's unique, editable
+  address (for example `/recipes/laventelisaippua`); an unknown slug answers
+  404. Old `/resepti?id=<id>` links still work and switch to the slug address.
 - **Admin:** log in at `/hallinta/kirjaudu`, then add, edit and delete recipes
   and categories.
 
@@ -172,6 +174,9 @@ order when the server starts:
 |---|---|
 | `0001__create_recipe_tables.sql` | The `categories` and `recipes` tables |
 | `0002__seed_initial_recipes.sql` | Starter content: two categories and the original recipes |
+| `0003__create_images_table.sql` | The `images` table for uploaded images |
+| `0004__allow_longer_recipe_descriptions.sql` | Descriptions up to 50,000 characters, for editor blocks |
+| `0005__add_recipe_slugs.sql` | The unique `slug` of each recipe, made from the names of existing recipes |
 
 **Naming:** `<number>__<name>.sql`, for example `0003__add_servings_to_recipes.sql`:
 four digits, two underscores, then lowercase letters, digits and underscores.
@@ -257,6 +262,13 @@ Teksti kuvan oikealla puolella.
   editor and the public recipe page. Unknown blocks are skipped, and text is
   always inserted as text, never as HTML.
 
+**Slugs.** Each recipe has a slug, the last part of its page address
+`/recipes/<slug>`: lowercase letters a-z, digits and single dashes, at most 100
+characters, unique among recipes (the database enforces all of this). In the
+editor the slug follows the name (ä becomes a, spaces become dashes) until you
+edit it yourself. Changing a slug changes the page address, so links to the
+old address stop working.
+
 Descriptions may be up to 50,000 characters. Lists (`GET /api/recipes`) carry
 only an `excerpt`, the text of the first paragraph block, to stay small.
 
@@ -320,8 +332,9 @@ Reading is public; changes need a login token (`Authorization: Bearer <token>`).
 |---|---|
 | `POST /api/login` | `{username, password}` returns `{token, expires_at}` |
 | `GET /api/session` | Checks the token (login required) |
-| `GET`, `POST /api/recipes` | List (with `excerpt` instead of `description`), create (`name`, `image`, `description`, `category_id`) |
-| `GET`, `PUT`, `DELETE /api/recipes/{id}` | Read, update, delete |
+| `GET`, `POST /api/recipes` | List (with `excerpt` instead of `description`), create (`slug`, `name`, `image`, `description`, `category_id`; 409 if another recipe has the slug) |
+| `GET`, `PUT`, `DELETE /api/recipes/{id}` | Read, update (409 if another recipe has the slug), delete |
+| `GET /api/recipes/slug/{slug}` | Read a recipe by its slug |
 | `GET`, `POST /api/categories` | List (alphabetical), create (`name`) |
 | `GET`, `PUT`, `DELETE /api/categories/{id}` | Read, rename, delete (409 while recipes use it) |
 | `GET /api/images` | List uploaded images with how many recipes use each (login required) |

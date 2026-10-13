@@ -163,6 +163,20 @@ function initLoginPage() {
 
 var FINNISH_ORDER = new Intl.Collator('fi', { sensitivity: 'base' });
 
+/*
+ * A recipe address from free text, by the same rules the database enforces:
+ * a-z, 0-9 and single dashes, no dash at either end. Letters with marks lose
+ * them (ä -> a, é -> e).
+ */
+function slugify(text) {
+  return text.toLowerCase()
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 80)
+    .replace(/-+$/, '');
+}
+
 function sortByName(items) {
   return items.sort(function (a, b) {
     return FINNISH_ORDER.compare(a.name, b.name);
@@ -468,10 +482,25 @@ function initEditPage() {
   var preview = document.getElementById('imagePreview');
   var fields = {
     name: document.getElementById('recipeName'),
+    slug: document.getElementById('recipeSlug'),
     category: document.getElementById('recipeCategory'),
     image: document.getElementById('recipeImage')
   };
   var pickImage = document.getElementById('pickRecipeImage');
+  var pageLink = document.getElementById('recipePageLink');
+  // The slug follows the name until it is edited by hand.
+  var slugEdited = false;
+  fields.name.addEventListener('input', function () {
+    if (!slugEdited) {
+      fields.slug.value = slugify(fields.name.value);
+    }
+  });
+  fields.slug.addEventListener('input', function () {
+    slugEdited = fields.slug.value !== '';
+  });
+  fields.slug.addEventListener('change', function () {
+    fields.slug.value = slugify(fields.slug.value);
+  });
   var editor = KasinEditor.create(document.getElementById('descriptionEditor'), '');
   var id = new URLSearchParams(window.location.search).get('id');
   setupLogout();
@@ -525,6 +554,10 @@ function initEditPage() {
       var recipe = results[1];
       if (recipe) {
         fields.name.value = recipe.name;
+        fields.slug.value = recipe.slug;
+        slugEdited = true;
+        pageLink.href = '/recipes/' + encodeURIComponent(recipe.slug);
+        pageLink.hidden = false;
         fields.category.value = String(recipe.category_id);
         fields.image.value = recipe.image;
         editor = KasinEditor.create(document.getElementById('descriptionEditor'), recipe.description);
@@ -549,6 +582,7 @@ function initEditPage() {
     errorEl.textContent = '';
     var recipe = {
       name: fields.name.value.trim(),
+      slug: slugify(fields.slug.value),
       category_id: Number(fields.category.value),
       image: fields.image.value.trim(),
       description: editor.serialize()
@@ -558,6 +592,12 @@ function initEditPage() {
       fields.name.focus();
       return;
     }
+    if (!recipe.slug) {
+      errorEl.textContent = 'Anna reseptille osoite.';
+      fields.slug.focus();
+      return;
+    }
+    fields.slug.value = recipe.slug;
     if (!fields.category.value) {
       errorEl.textContent = 'Valitse reseptille kategoria.';
       fields.category.focus();
@@ -580,8 +620,11 @@ function initEditPage() {
       .catch(function (error) {
         saveButton.disabled = false;
         if (error.status === 400) {
-          errorEl.textContent = 'Tarkista kentät: nimi ja kategoria ovat pakollisia. Nimi saa olla enintään ' +
+          errorEl.textContent = 'Tarkista kentät: nimi, osoite ja kategoria ovat pakollisia. Nimi saa olla enintään ' +
             '200 merkkiä ja kuvan osoite 500 merkkiä. Jos kategoria poistettiin juuri, lataa sivu uudelleen.';
+        } else if (error.status === 409) {
+          errorEl.textContent = 'Osoite /recipes/' + recipe.slug + ' on jo toisen reseptin käytössä. Valitse toinen osoite.';
+          fields.slug.focus();
         } else if (error.status === 413) {
           errorEl.textContent = 'Resepti on liian pitkä tallennettavaksi. Lyhennä kuvausta.';
         } else if (error.status === 404) {
