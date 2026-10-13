@@ -200,6 +200,10 @@ bool str_builder_append(Str_Builder *b, Str s) {
     return true;
 }
 
+bool str_builder_append_char(Str_Builder *b, char c) {
+    return str_builder_append(b, str_make(&c, 1));
+}
+
 bool str_builder_append_u64(Str_Builder *b, uint64_t value) {
     char digits[20];
     size_t n = 0;
@@ -209,6 +213,14 @@ bool str_builder_append_u64(Str_Builder *b, uint64_t value) {
         n++;
     } while (value != 0);
     return str_builder_append(b, str_make(digits + sizeof digits - n, n));
+}
+
+char const *str_builder_cstr(Str_Builder *b) {
+    if (b->overflow || b->len >= b->capacity) {
+        return NULL;
+    }
+    b->data[b->len] = '\0';
+    return b->data;
 }
 
 Str str_builder_str(Str_Builder const *b) {

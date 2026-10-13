@@ -19,6 +19,8 @@
 #include <sqlite3.h>
 #include <stdbool.h>
 
+#include "str.h"
+
 /**
  * Brings the database up to date with the migration files in a directory.
  *
@@ -30,6 +32,6 @@
  * @param dir Directory holding the migration files.
  * @return False on failure, after printing why.
  */
-bool migrate(sqlite3 *conn, char const *dir);
+bool migrate(sqlite3 *conn, Str dir);
 
 #endif

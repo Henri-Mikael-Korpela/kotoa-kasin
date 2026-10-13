@@ -7,35 +7,36 @@
 // base64url('{"alg":"HS256","typ":"JWT"}').
 static Str const HEADER_B64 = STR_INIT("eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9");
 
-static char const BASE64URL[] =
-    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+static Str const BASE64URL = STR_INIT(
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_");
 
 #define MAX_PAYLOAD 256
 
+// Appends the base64url character for the low six bits of a value.
+static void append_sextet(Str_Builder *out, uint32_t value) {
+    str_builder_append_char(out, BASE64URL.data[value & 63]);
+}
+
 static bool base64url_encode(Str_Builder *out, uint8_t const *data, size_t len) {
-    char quad[4];
     size_t i = 0;
     while (i + 3 <= len) {
         uint32_t v = (uint32_t)data[i] << 16 | (uint32_t)data[i + 1] << 8 | data[i + 2];
-        quad[0] = BASE64URL[(v >> 18) & 63];
-        quad[1] = BASE64URL[(v >> 12) & 63];
-        quad[2] = BASE64URL[(v >> 6) & 63];
-        quad[3] = BASE64URL[v & 63];
-        str_builder_append(out, str_make(quad, 4));
+        append_sextet(out, v >> 18);
+        append_sextet(out, v >> 12);
+        append_sextet(out, v >> 6);
+        append_sextet(out, v);
         i += 3;
     }
     size_t rest = len - i;
     if (rest == 1) {
         uint32_t v = (uint32_t)data[i] << 16;
-        quad[0] = BASE64URL[(v >> 18) & 63];
-        quad[1] = BASE64URL[(v >> 12) & 63];
-        str_builder_append(out, str_make(quad, 2));
+        append_sextet(out, v >> 18);
+        append_sextet(out, v >> 12);
     } else if (rest == 2) {
         uint32_t v = (uint32_t)data[i] << 16 | (uint32_t)data[i + 1] << 8;
-        quad[0] = BASE64URL[(v >> 18) & 63];
-        quad[1] = BASE64URL[(v >> 12) & 63];
-        quad[2] = BASE64URL[(v >> 6) & 63];
-        str_builder_append(out, str_make(quad, 3));
+        append_sextet(out, v >> 18);
+        append_sextet(out, v >> 12);
+        append_sextet(out, v >> 6);
     }
     return !out->overflow;
 }

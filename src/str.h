@@ -211,11 +211,27 @@ void str_builder_init(Str_Builder *b, char *buf, size_t capacity);
 bool str_builder_append(Str_Builder *b, Str s);
 
 /**
+ * Appends one byte. Nothing is written if it does not fit.
+ *
+ * @return False, and sets overflow, when it does not fit.
+ */
+bool str_builder_append_char(Str_Builder *b, char c);
+
+/**
  * Appends an unsigned number in decimal. Nothing is written if it does not fit.
  *
  * @return False, and sets overflow, when the digits do not fit.
  */
 bool str_builder_append_u64(Str_Builder *b, uint64_t value);
+
+/**
+ * Returns the bytes written so far as a NUL-terminated C string, for passing to
+ * C functions that need one. The terminator is written just past the content
+ * without changing the length.
+ *
+ * @return The buffer, or NULL when the builder overflowed or is full.
+ */
+char const *str_builder_cstr(Str_Builder *b);
 
 /**
  * Returns the bytes written so far.

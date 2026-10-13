@@ -77,7 +77,7 @@ bool db_global_init(void *heap_mem, size_t heap_size);
  * @param migrations_dir Directory of <number>__<name>.sql migration files.
  * @return False on failure, after printing why.
  */
-bool db_prepare_file(char const *path, Db_Storage storage, char const *migrations_dir);
+bool db_prepare_file(Str path, Db_Storage storage, Str migrations_dir);
 
 /**
  * Opens a connection for the calling thread and prepares its statements.
@@ -85,7 +85,7 @@ bool db_prepare_file(char const *path, Db_Storage storage, char const *migration
  * @param storage Must match what was passed to db_prepare_file().
  * @return False on failure, after printing why.
  */
-bool db_open(Db *db, char const *path, Db_Storage storage);
+bool db_open(Db *db, Str path, Db_Storage storage);
 
 /**
  * Finalizes statements and closes the connection.

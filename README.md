@@ -209,7 +209,7 @@ on first start: `0001` and `0002` are recorded as applied without running.
 
 | Path | Contents |
 |---|---|
-| `src/` | The server: `main.c` (HTTP, routing, API), `db.c` (SQLite), `migrate.c` (migration runner), `jwt.c`, `sha256.c`, `str.c`, `arena.c`, `buddy.c` |
+| `src/` | The server: `main.c` (HTTP, routing, API), `db.c` (SQLite), `migrate.c` (migration runner), `sql.c` (SQLite helpers), `jwt.c`, `sha256.c`, `str.c`, `arena.c`, `buddy.c` |
 | `migrations/` | Database migrations, `<number>__<name>.sql` |
 | `public/` | The site: pages, `css/`, `js/`, `assets/`; `hallinta/` holds the admin pages |
 | `Dockerfile` | Production image (used for Azure) |

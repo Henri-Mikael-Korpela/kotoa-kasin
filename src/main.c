@@ -1116,12 +1116,12 @@ static void on_signal(int sig) {
     STOP_REQUESTED = 1;
 }
 
-static void usage(char const *argv0) {
+static void usage(Str argv0) {
     fprintf(stderr,
-            "usage: %s [-p port] [-t threads] [-r docroot] [-d database] [-m migrations] [-s local|share]\n"
+            "usage: %.*s [-p port] [-t threads] [-r docroot] [-d database] [-m migrations] [-s local|share]\n"
             "  -m  directory of <number>__<name>.sql migrations (default: migrations)\n"
             "  -s  where the database lives; use share for a network share such as Azure Files\n",
-            argv0);
+            STR_ARG(argv0));
 }
 
 int main(int argc, char **argv) {
@@ -1129,9 +1129,11 @@ int main(int argc, char **argv) {
     // CHECK What is _SC_NPROCESSORS_ONLN?
     long nworkers = sysconf(_SC_NPROCESSORS_ONLN);
     
-    char const *root = NULL;
-    char const *db_path = "kotoa.db";
-    char const *migrations_dir = "migrations";
+    // getopt() and argv are C strings; the options are kept as Str from here on.
+    Str program = str_from_cstr(argv[0]);
+    Str root = STR("");
+    Str db_path = STR("kotoa.db");
+    Str migrations_dir = STR("migrations");
     Db_Storage db_storage = DB_STORAGE_LOCAL;
     int opt;
     // CHECK What does getopt do?
@@ -1140,26 +1142,26 @@ int main(int argc, char **argv) {
         switch (opt) {
         case 'p':
             if (!str_to_u64(str_from_cstr(optarg), &value) || value > 65535) {
-                usage(argv[0]);
+                usage(program);
                 return EX_USAGE;
             }
             port = (int)value;
             break;
         case 't':
             if (!str_to_u64(str_from_cstr(optarg), &value) || value > MAX_WORKERS) {
-                usage(argv[0]);
+                usage(program);
                 return EX_USAGE;
             }
             nworkers = (long)value;
             break;
         case 'r':
-            root = optarg;
+            root = str_from_cstr(optarg);
             break;
         case 'd':
-            db_path = optarg;
+            db_path = str_from_cstr(optarg);
             break;
         case 'm':
-            migrations_dir = optarg;
+            migrations_dir = str_from_cstr(optarg);
             break;
         case 's':
             if (str_eq(str_from_cstr(optarg), STR("local"))) {
@@ -1167,17 +1169,17 @@ int main(int argc, char **argv) {
             } else if (str_eq(str_from_cstr(optarg), STR("share"))) {
                 db_storage = DB_STORAGE_SHARE;
             } else {
-                usage(argv[0]);
+                usage(program);
                 return EX_USAGE;
             }
             break;
         default:
-            usage(argv[0]);
+            usage(program);
             return opt == 'h' ? EXIT_SUCCESS : EX_USAGE;
         }
     }
     if (port <= 0 || port > 65535) {
-        usage(argv[0]);
+        usage(program);
         return EX_USAGE;
     }
     if (nworkers < 1) {
@@ -1187,10 +1189,14 @@ int main(int argc, char **argv) {
         nworkers = MAX_WORKERS;
     }
 
-    if (root) {
-        ROOT_FD = open(root, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+    if (root.len > 0) {
+        char root_z[MAX_PATH_LEN];  // open() needs a NUL-terminated path.
+        if (str_to_cstr(root, root_z, sizeof root_z)) {
+            ROOT_FD = open(root_z, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+        }
         if (ROOT_FD < 0) {
-            fprintf(stderr, "warning: cannot open docroot '%s': %s\n", root, strerror(errno));
+            fprintf(stderr, "warning: cannot open docroot '%.*s': %s\n",
+                    STR_ARG(root), strerror(errno));
         }
     }
 
@@ -1215,9 +1221,8 @@ int main(int argc, char **argv) {
     arena_init(&arena, mem, total);
 
     // Session tokens survive restarts only when the secret is configured.
-    char const *jwt_secret = getenv("KASIN_JWT_SECRET");
-    if (jwt_secret && jwt_secret[0] != '\0') {
-        Str secret = str_from_cstr(jwt_secret);
+    Str secret = str_from_cstr(getenv("KASIN_JWT_SECRET"));
+    if (secret.len > 0) {
         Sha256 key_hash;
         sha256_init(&key_hash);
         sha256_update(&key_hash, secret.data, secret.len);
@@ -1298,10 +1303,10 @@ int main(int argc, char **argv) {
     signal(SIGPIPE, SIG_IGN);
 
     printf("kasin-httpd: port %d, %ld workers, %d conns/worker, req %d B, resp %d B, "
-           "reserved %.1f MiB (SQLite heap %d MiB), docroot %s, database %s\n",
+           "reserved %.1f MiB (SQLite heap %d MiB), docroot %.*s, database %.*s\n",
            port, nworkers, MAX_CONNS_PER_WORKER, REQ_BUF_SIZE, RESP_BUF_SIZE,
            (double)total / (1024.0 * 1024.0), DB_HEAP_SIZE / (1024 * 1024),
-           root ? root : "(none)", db_path);
+           STR_ARG(root.len > 0 ? root : STR("(none)")), STR_ARG(db_path));
     fflush(stdout);
 
     long const worker_count = nworkers;

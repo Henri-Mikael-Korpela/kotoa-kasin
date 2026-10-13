@@ -27,6 +27,7 @@ add_executable(kasin-httpd
   src/jwt.c
   src/migrate.c
   src/sha256.c
+  src/sql.c
   src/str.c)
 target_compile_options(kasin-httpd PRIVATE -Wall -Wextra -Wpedantic)
 target_compile_definitions(kasin-httpd PRIVATE

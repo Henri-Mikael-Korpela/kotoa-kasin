@@ -6,6 +6,9 @@
 
 #include "buddy.h"
 #include "migrate.h"
+#include "sql.h"
+
+#define MAX_FILE_PATH 1024
 
 static Buddy_Heap DB_HEAP;
 
@@ -70,16 +73,6 @@ bool db_global_init(void *heap_mem, size_t heap_size) {
     return true;
 }
 
-static bool exec(sqlite3 *conn, char const *sql) {
-    char *error = NULL;
-    if (sqlite3_exec(conn, sql, NULL, NULL, &error) != SQLITE_OK) {
-        fprintf(stderr, "db: %s\n", error ? error : sqlite3_errmsg(conn));
-        sqlite3_free(error);
-        return false;
-    }
-    return true;
-}
-
 /*
  * SQLite's "unix-dotfile" VFS locks a database by creating a directory called
  * "<database>.lock" and removing it afterwards. Creating a directory is atomic
@@ -87,13 +80,19 @@ static bool exec(sqlite3 *conn, char const *sql) {
  * processes out, such as the old revision while a new one starts.
  */
 static char const *vfs_for(Db_Storage storage) {
+    // sqlite3_open_v2() takes a C string; NULL selects the default VFS.
     return storage == DB_STORAGE_SHARE ? "unix-dotfile" : NULL;
 }
 
-static bool open_connection(sqlite3 **conn, char const *path, Db_Storage storage) {
+static bool open_connection(sqlite3 **conn, Str path, Db_Storage storage) {
+    char path_z[MAX_FILE_PATH];  // sqlite3_open_v2() needs a NUL-terminated path.
+    if (!str_to_cstr(path, path_z, sizeof path_z)) {
+        fprintf(stderr, "db: database path is empty or too long\n");
+        return false;
+    }
     int flags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_NOMUTEX;
-    if (sqlite3_open_v2(path, conn, flags, vfs_for(storage)) != SQLITE_OK) {
-        fprintf(stderr, "db: cannot open '%s': %s\n", path,
+    if (sqlite3_open_v2(path_z, conn, flags, vfs_for(storage)) != SQLITE_OK) {
+        fprintf(stderr, "db: cannot open '%.*s': %s\n", STR_ARG(path),
                 *conn ? sqlite3_errmsg(*conn) : "out of memory");
         sqlite3_close(*conn);
         *conn = NULL;
@@ -101,7 +100,8 @@ static bool open_connection(sqlite3 **conn, char const *path, Db_Storage storage
     }
     sqlite3_busy_timeout(*conn, 5000);
     sqlite3_extended_result_codes(*conn, 1);  // Tells unique and foreign key failures apart.
-    return exec(*conn, "PRAGMA synchronous = NORMAL; PRAGMA cache_size = -512;");
+    return sql_exec(*conn, STR("PRAGMA synchronous = NORMAL; PRAGMA cache_size = -512;"),
+                    STR("configuring connection"));
 }
 
 /*
@@ -109,9 +109,16 @@ static bool open_connection(sqlite3 **conn, char const *path, Db_Storage storage
  * block every later start. Wait briefly in case a live process (an old revision
  * shutting down) is about to release it, then remove it.
  */
-static void clear_stale_lock(char const *path) {
-    char lock_path[1024];
-    snprintf(lock_path, sizeof lock_path, "%s.lock", path);
+static void clear_stale_lock(Str path) {
+    char lock_buf[MAX_FILE_PATH];
+    Str_Builder lock;
+    str_builder_init(&lock, lock_buf, sizeof lock_buf);
+    str_builder_append(&lock, path);
+    str_builder_append(&lock, STR(".lock"));
+    char const *lock_path = str_builder_cstr(&lock);  // stat() and rmdir() need C strings.
+    if (!lock_path) {
+        return;
+    }
     struct stat st;
     for (int i = 0; i < 30 && stat(lock_path, &st) == 0; i++) {
         usleep(100 * 1000);
@@ -124,7 +131,7 @@ static void clear_stale_lock(char const *path) {
     }
 }
 
-bool db_prepare_file(char const *path, Db_Storage storage, char const *migrations_dir) {
+bool db_prepare_file(Str path, Db_Storage storage, Str migrations_dir) {
     if (storage == DB_STORAGE_SHARE) {
         clear_stale_lock(path);
     }
@@ -133,14 +140,15 @@ bool db_prepare_file(char const *path, Db_Storage storage, char const *migration
         return false;
     }
     // Table rebuilds in migrations need foreign keys off; checked once at the end.
-    bool ok = exec(conn, storage == DB_STORAGE_LOCAL ? "PRAGMA journal_mode = WAL;"
-                                                      : "PRAGMA journal_mode = DELETE;") &&
-              exec(conn, "PRAGMA foreign_keys = OFF;");
+    Str journal_mode = storage == DB_STORAGE_LOCAL ? STR("PRAGMA journal_mode = WAL;")
+                                                    : STR("PRAGMA journal_mode = DELETE;");
+    bool ok = sql_exec(conn, journal_mode, STR("setting journal mode")) &&
+              sql_exec(conn, STR("PRAGMA foreign_keys = OFF;"), STR("disabling foreign keys"));
 
     ok = ok && migrate(conn, migrations_dir);
 
     sqlite3_stmt *check = NULL;
-    if (ok && sqlite3_prepare_v2(conn, "PRAGMA foreign_key_check", -1, &check, NULL) == SQLITE_OK &&
+    if (ok && sql_prepare(conn, &check, STR("PRAGMA foreign_key_check"), false) &&
         sqlite3_step(check) == SQLITE_ROW) {
         fputs("db: foreign key check failed\n", stderr);
         ok = false;
@@ -178,15 +186,11 @@ bool db_prepare_file(char const *path, Db_Storage storage, char const *migration
     "json_object('id', c.id, 'name', c.name, 'recipe_count',"            \
     " (SELECT count(*) FROM recipes WHERE category_id = c.id))"
 
-static bool prepare(Db *db, sqlite3_stmt **stmt, char const *sql) {
-    if (sqlite3_prepare_v3(db->conn, sql, -1, SQLITE_PREPARE_PERSISTENT, stmt, NULL) != SQLITE_OK) {
-        fprintf(stderr, "db: cannot prepare statement: %s\n", sqlite3_errmsg(db->conn));
-        return false;
-    }
-    return true;
+static bool prepare(Db *db, sqlite3_stmt **stmt, Str sql) {
+    return sql_prepare(db->conn, stmt, sql, true);
 }
 
-bool db_open(Db *db, char const *path, Db_Storage storage) {
+bool db_open(Db *db, Str path, Db_Storage storage) {
     *db = (Db) {
         .conn = NULL,
         .is_json_object = NULL,
@@ -202,50 +206,50 @@ bool db_open(Db *db, char const *path, Db_Storage storage) {
         .delete_category = NULL,
         .parse_login = NULL,
     };
-    if (!open_connection(&db->conn, path, storage) || !exec(db->conn, "PRAGMA foreign_keys = ON;")) {
+    if (!open_connection(&db->conn, path, storage) || !sql_exec(db->conn, STR("PRAGMA foreign_keys = ON;"), STR("enabling foreign keys"))) {
         db_close(db);
         return false;
     }
     bool ok =
         prepare(db, &db->is_json_object,
-                "SELECT CASE WHEN json_valid(?1) THEN json_type(?1) = 'object' ELSE 0 END") &&
+                STR("SELECT CASE WHEN json_valid(?1) THEN json_type(?1) = 'object' ELSE 0 END")) &&
         prepare(db, &db->list_recipes,
-                "SELECT json_group_array(json(recipe)) FROM ("
+                STR("SELECT json_group_array(json(recipe)) FROM ("
                 " SELECT " RECIPE_JSON " AS recipe"
-                " FROM recipes r JOIN categories c ON c.id = r.category_id ORDER BY r.id)") &&
+                " FROM recipes r JOIN categories c ON c.id = r.category_id ORDER BY r.id)")) &&
         prepare(db, &db->get_recipe,
-                "SELECT " RECIPE_JSON
-                " FROM recipes r JOIN categories c ON c.id = r.category_id WHERE r.id = ?1") &&
+                STR("SELECT " RECIPE_JSON
+                " FROM recipes r JOIN categories c ON c.id = r.category_id WHERE r.id = ?1")) &&
         prepare(db, &db->insert_recipe,
-                "INSERT INTO recipes (category_id, name, image, description) VALUES ("
+                STR("INSERT INTO recipes (category_id, name, image, description) VALUES ("
                 INTEGER_FIELD("1", "category_id") ", "
                 TEXT_FIELD("1", "name", "NULL") ", "
                 TEXT_FIELD("1", "image", "''") ", "
                 TEXT_FIELD("1", "description", "''") ")"
-                " RETURNING id") &&
+                " RETURNING id")) &&
         prepare(db, &db->update_recipe,
-                "UPDATE recipes SET"
+                STR("UPDATE recipes SET"
                 " category_id = " INTEGER_FIELD("2", "category_id") ","
                 " name = " TEXT_FIELD("2", "name", "NULL") ","
                 " image = " TEXT_FIELD("2", "image", "''") ","
                 " description = " TEXT_FIELD("2", "description", "''")
-                " WHERE id = ?1") &&
-        prepare(db, &db->delete_recipe, "DELETE FROM recipes WHERE id = ?1") &&
+                " WHERE id = ?1")) &&
+        prepare(db, &db->delete_recipe, STR("DELETE FROM recipes WHERE id = ?1")) &&
         prepare(db, &db->list_categories,
-                "SELECT json_group_array(json(category)) FROM ("
+                STR("SELECT json_group_array(json(category)) FROM ("
                 " SELECT " CATEGORY_JSON " AS category"
-                " FROM categories c ORDER BY c.name COLLATE NOCASE)") &&
+                " FROM categories c ORDER BY c.name COLLATE NOCASE)")) &&
         prepare(db, &db->get_category,
-                "SELECT " CATEGORY_JSON " FROM categories c WHERE c.id = ?1") &&
+                STR("SELECT " CATEGORY_JSON " FROM categories c WHERE c.id = ?1")) &&
         prepare(db, &db->insert_category,
-                "INSERT INTO categories (name) VALUES (trim(" TEXT_FIELD("1", "name", "NULL") "))"
-                " RETURNING id") &&
+                STR("INSERT INTO categories (name) VALUES (trim(" TEXT_FIELD("1", "name", "NULL") "))"
+                " RETURNING id")) &&
         prepare(db, &db->update_category,
-                "UPDATE categories SET name = trim(" TEXT_FIELD("2", "name", "NULL") ")"
-                " WHERE id = ?1") &&
-        prepare(db, &db->delete_category, "DELETE FROM categories WHERE id = ?1") &&
+                STR("UPDATE categories SET name = trim(" TEXT_FIELD("2", "name", "NULL") ")"
+                " WHERE id = ?1")) &&
+        prepare(db, &db->delete_category, STR("DELETE FROM categories WHERE id = ?1")) &&
         prepare(db, &db->parse_login,
-                "SELECT json_extract(?1, '$.username'), json_extract(?1, '$.password')");
+                STR("SELECT json_extract(?1, '$.username'), json_extract(?1, '$.password')"));
     if (!ok) {
         db_close(db);
     }
@@ -301,12 +305,8 @@ static void finish(sqlite3_stmt *stmt) {
     sqlite3_clear_bindings(stmt);
 }
 
-static bool bind_str(sqlite3_stmt *stmt, int index, Str s) {
-    return sqlite3_bind_text(stmt, index, s.len > 0 ? s.data : "", (int)s.len, SQLITE_STATIC) == SQLITE_OK;
-}
-
 static Db_Status check_json_object(Db *db, Str json) {
-    if (json.len > 64 * 1024 || !bind_str(db->is_json_object, 1, json)) {
+    if (json.len > 64 * 1024 || !sql_bind_str(db->is_json_object, 1, json)) {
         finish(db->is_json_object);
         return DB_INVALID;
     }
@@ -326,11 +326,7 @@ static Db_Status append_text_result(sqlite3_stmt *stmt, Str_Builder *out) {
     int rc = sqlite3_step(stmt);
     Db_Status status;
     if (rc == SQLITE_ROW) {
-        char const *text = (char const *)sqlite3_column_text(stmt, 0);
-        int len = sqlite3_column_bytes(stmt, 0);
-        if (!text) {
-            status = DB_ERROR;
-        } else if (str_builder_append(out, str_make(text, (size_t)len))) {
+        if (str_builder_append(out, sql_column_str(stmt, 0))) {
             status = DB_OK;
         } else {
             status = DB_TOO_LARGE;
@@ -356,7 +352,7 @@ static Db_Status insert_from_json(Db *db, sqlite3_stmt *stmt, Str json, int64_t 
     if (status != DB_OK) {
         return status;
     }
-    bind_str(stmt, 1, json);
+    sql_bind_str(stmt, 1, json);
     int rc = sqlite3_step(stmt);
     if (rc == SQLITE_ROW) {
         *id = sqlite3_column_int64(stmt, 0);
@@ -389,7 +385,7 @@ static Db_Status update_from_json(Db *db, sqlite3_stmt *stmt, int64_t id, Str js
         return status;
     }
     sqlite3_bind_int64(stmt, 1, id);
-    bind_str(stmt, 2, json);
+    sql_bind_str(stmt, 2, json);
     return change_row(db, stmt, map_error);
 }
 
@@ -443,9 +439,7 @@ static bool append_text_column(sqlite3_stmt *stmt, int column, Str_Builder *out)
     if (sqlite3_column_type(stmt, column) != SQLITE_TEXT) {
         return false;
     }
-    char const *text = (char const *)sqlite3_column_text(stmt, column);
-    int len = sqlite3_column_bytes(stmt, column);
-    return text && str_builder_append(out, str_make(text, (size_t)len));
+    return str_builder_append(out, sql_column_str(stmt, column));
 }
 
 Db_Status db_parse_login(Db *db, Str json, Str_Builder *username, Str_Builder *password) {
@@ -453,7 +447,7 @@ Db_Status db_parse_login(Db *db, Str json, Str_Builder *username, Str_Builder *p
     if (status != DB_OK) {
         return status;
     }
-    bind_str(db->parse_login, 1, json);
+    sql_bind_str(db->parse_login, 1, json);
     int rc = sqlite3_step(db->parse_login);
     if (rc != SQLITE_ROW) {
         status = status_from(rc);
