@@ -1211,11 +1211,11 @@ static int build_response(Worker *w, Conn *c) {
     }
 
     /*
-     * Recipe pages, /recipes/<slug>: one page shows every recipe and loads it
+     * Recipe pages, /reseptit/<slug>: one page shows every recipe and loads it
      * by the slug in its address. An unknown slug still gets the page (which
      * says so), but with status 404.
      */
-    Str recipes_prefix = STR("/recipes/");
+    Str recipes_prefix = STR("/reseptit/");
     if (str_starts_with(r.path, recipes_prefix)) {
         Str slug = str_slice(r.path, recipes_prefix.len, r.path.len);
         bool exists = false;

@@ -7,10 +7,6 @@ from an admin view at `/hallinta`.
 - **Server:** C, Linux only. epoll, one worker per thread, all memory reserved
   at startup, no `malloc` in the request path. Uses SQLite as its only library.
 - **Site:** static pages in `public/`; the front page loads recipes from the API.
-- **Recipe pages:** every recipe has a page at `/recipes/<slug>`, built from
-  the blocks of its description. The slug is the recipe's unique, editable
-  address (for example `/recipes/laventelisaippua`); an unknown slug answers
-  404. Old `/resepti?id=<id>` links still work and switch to the slug address.
 - **Admin:** log in at `/hallinta/kirjaudu`, then add, edit and delete recipes
   and categories.
 
@@ -263,7 +259,7 @@ Teksti kuvan oikealla puolella.
   always inserted as text, never as HTML.
 
 **Slugs.** Each recipe has a slug, the last part of its page address
-`/recipes/<slug>`: lowercase letters a-z, digits and single dashes, at most 100
+`/reseptit/<slug>`: lowercase letters a-z, digits and single dashes, at most 100
 characters, unique among recipes (the database enforces all of this). In the
 editor the slug follows the name (ä becomes a, spaces become dashes) until you
 edit it yourself. Changing a slug changes the page address, so links to the

@@ -556,7 +556,7 @@ function initEditPage() {
         fields.name.value = recipe.name;
         fields.slug.value = recipe.slug;
         slugEdited = true;
-        pageLink.href = '/recipes/' + encodeURIComponent(recipe.slug);
+        pageLink.href = '/reseptit/' + encodeURIComponent(recipe.slug);
         pageLink.hidden = false;
         fields.category.value = String(recipe.category_id);
         fields.image.value = recipe.image;
@@ -623,7 +623,7 @@ function initEditPage() {
           errorEl.textContent = 'Tarkista kentät: nimi, osoite ja kategoria ovat pakollisia. Nimi saa olla enintään ' +
             '200 merkkiä ja kuvan osoite 500 merkkiä. Jos kategoria poistettiin juuri, lataa sivu uudelleen.';
         } else if (error.status === 409) {
-          errorEl.textContent = 'Osoite /recipes/' + recipe.slug + ' on jo toisen reseptin käytössä. Valitse toinen osoite.';
+          errorEl.textContent = 'Osoite /reseptit/' + recipe.slug + ' on jo toisen reseptin käytössä. Valitse toinen osoite.';
           fields.slug.focus();
         } else if (error.status === 413) {
           errorEl.textContent = 'Resepti on liian pitkä tallennettavaksi. Lyhennä kuvausta.';

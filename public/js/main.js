@@ -133,7 +133,7 @@ function showCategoryFilter(category) {
 }
 
 function recipeUrl(recipe) {
-  return '/recipes/' + encodeURIComponent(recipe.slug);
+  return '/reseptit/' + encodeURIComponent(recipe.slug);
 }
 
 function createRecipeCard(recipe) {
@@ -200,11 +200,11 @@ function loadRecipes(grid, categoryFilter) {
     });
 }
 
-// Recipe page: /recipes/<slug>. The older /resepti?id=<id> addresses still
+// Recipe page: /reseptit/<slug>. The older /resepti?id=<id> addresses still
 // work and are switched to the slug address.
 
 function recipeRequest() {
-  var match = /^\/recipes\/([^/]+)$/.exec(window.location.pathname);
+  var match = /^\/reseptit\/([^/]+)$/.exec(window.location.pathname);
   if (match) {
     return '/api/recipes/slug/' + match[1];
   }
