@@ -142,20 +142,42 @@ var KasinGallery = (function () {
     return messageFor(error, '"' + file.name + '" jäi lataamatta.');
   }
 
-  function createThumbButton(image) {
-    var button = document.createElement('button');
-    button.type = 'button';
-    button.className = 'gallery-thumb';
-    var img = document.createElement('img');
-    img.src = image.url;
-    img.alt = displayName(image);
-    img.loading = 'lazy';
-    button.appendChild(img);
-    button.setAttribute('aria-label', 'Valitse ' + displayName(image));
-    return button;
+  var LONG_PRESS_MS = 500;
+  var DOUBLE_TAP_MS = 350;
+
+  function extensionOf(image) {
+    var match = /\.([a-z0-9]+)$/i.exec(image.url);
+    return match ? match[1].toUpperCase() : '';
   }
 
-  // Picker dialog: resolves with the chosen image ({id, url, ...}) or null.
+  function formatDate(iso) {
+    var date = new Date(iso);
+    return isNaN(date.getTime()) ? '' : date.toLocaleDateString('fi-FI', {
+      day: 'numeric',
+      month: 'numeric',
+      year: 'numeric'
+    });
+  }
+
+  function infoRow(label, value) {
+    var row = document.createElement('div');
+    var term = document.createElement('dt');
+    term.textContent = label;
+    var detail = document.createElement('dd');
+    detail.textContent = value;
+    row.append(term, detail);
+    return { row: row, value: detail };
+  }
+
+  /*
+   * Picker dialog: resolves with the chosen image ({id, url, ...}) or null.
+   *
+   * A click (or tap) shows an image's details in the info panel, which is
+   * always visible on the right on wide screens. A double click (or double tap)
+   * chooses the image. On a device with a mouse, an X in the corner of a
+   * hovered image deletes it; on touch screens, holding an image opens a menu
+   * with Use, Details and Delete.
+   */
   function pick() {
     return new Promise(function (resolve) {
       var dialog = document.createElement('dialog');
@@ -171,12 +193,27 @@ var KasinGallery = (function () {
         '  </label>' +
         '  <span class="gallery-status" aria-live="polite"></span>' +
         '</div>' +
-        '<div class="gallery-grid gallery-dialog-grid"></div>';
+        '<div class="gallery-dialog-body">' +
+        '  <div class="gallery-grid gallery-dialog-grid" role="listbox" aria-label="Kuvat"></div>' +
+        '  <aside class="gallery-info" aria-live="polite">' +
+        '    <div class="gallery-info-header">' +
+        '      <h3>Kuvan tiedot</h3>' +
+        '      <button type="button" class="block-icon gallery-info-close" aria-label="Sulje tiedot">✕</button>' +
+        '    </div>' +
+        '    <div class="gallery-info-body"></div>' +
+        '  </aside>' +
+        '</div>' +
+        '<div class="gallery-menu" role="menu" hidden></div>';
       document.body.appendChild(dialog);
 
       var grid = dialog.querySelector('.gallery-grid');
       var status = dialog.querySelector('.gallery-status');
       var input = dialog.querySelector('input[type="file"]');
+      var info = dialog.querySelector('.gallery-info');
+      var infoBody = dialog.querySelector('.gallery-info-body');
+      var menu = dialog.querySelector('.gallery-menu');
+      var images = [];
+      var selectedId = null;
       var finished = false;
 
       // Resolves once, whether a picture, the close button or Esc ends the dialog.
@@ -202,18 +239,265 @@ var KasinGallery = (function () {
           finish(null);  // A click on the backdrop.
         }
       });
+      dialog.querySelector('.gallery-info-close').addEventListener('click', function () {
+        info.classList.remove('is-open');
+      });
+
+      function findImage(id) {
+        return images.filter(function (image) {
+          return image.id === id;
+        })[0] || null;
+      }
+
+      function showEmptyInfo() {
+        var hint = document.createElement('p');
+        hint.className = 'gallery-info-hint';
+        hint.textContent = images.length > 0
+          ? 'Napsauta kuvaa nähdäksesi sen tiedot. Kaksoisnapsautus valitsee kuvan.'
+          : 'Lataa kuva painikkeesta yllä.';
+        infoBody.replaceChildren(hint);
+      }
+
+      function showInfo(image) {
+        var preview = document.createElement('div');
+        preview.className = 'gallery-info-preview';
+        var img = document.createElement('img');
+        img.src = image.url;
+        img.alt = '';
+        preview.appendChild(img);
+
+        var list = document.createElement('dl');
+        list.className = 'gallery-info-list';
+        var dimensions = infoRow('Mitat', '…');
+        list.append(
+          infoRow('Nimi', displayName(image)).row,
+          infoRow('Tiedostotyyppi', extensionOf(image)).row,
+          infoRow('Koko', formatSize(image.size)).row,
+          dimensions.row,
+          infoRow('Ladattu', formatDate(image.created_at)).row,
+          infoRow('Käytössä', image.used > 0 ? image.used + ' reseptissä' : 'Ei käytössä').row
+        );
+        function showDimensions() {
+          dimensions.value.textContent = img.naturalWidth + ' × ' + img.naturalHeight + ' px';
+        }
+        if (img.complete && img.naturalWidth) {
+          showDimensions();
+        } else {
+          img.addEventListener('load', showDimensions);
+        }
+
+        var actions = document.createElement('div');
+        actions.className = 'gallery-info-actions';
+        var use = document.createElement('button');
+        use.type = 'button';
+        use.className = 'btn btn-primary';
+        use.textContent = 'Käytä kuvaa';
+        use.addEventListener('click', function () {
+          finish(image);
+        });
+        var remove = createCategoryButton('Poista kuva', 'is-danger');
+        if (image.used > 0) {
+          remove.disabled = true;
+          remove.title = 'Kuva on käytössä reseptissä, joten sitä ei voi poistaa.';
+        }
+        remove.addEventListener('click', function () {
+          deleteImage(image);
+        });
+        actions.append(use, remove);
+
+        infoBody.replaceChildren(preview, list, actions);
+      }
+
+      function select(image, openPanel) {
+        selectedId = image.id;
+        Array.prototype.forEach.call(grid.querySelectorAll('.gallery-thumb'), function (thumb) {
+          thumb.setAttribute('aria-selected', String(Number(thumb.dataset.id) === image.id));
+        });
+        showInfo(image);
+        if (openPanel) {
+          info.classList.add('is-open');  // On narrow screens the panel slides in.
+        }
+      }
+
+      function deleteImage(image) {
+        closeMenu();
+        if (image.used > 0) {
+          status.textContent = 'Kuva "' + displayName(image) + '" on käytössä reseptissä, joten sitä ei voi poistaa.';
+          return;
+        }
+        if (!window.confirm('Poistetaanko kuva "' + displayName(image) + '"?\n\nPoistoa ei voi perua.')) {
+          return;
+        }
+        api('DELETE', '/api/images/' + encodeURIComponent(image.id)).then(function () {
+          if (selectedId === image.id) {
+            selectedId = null;
+            info.classList.remove('is-open');
+          }
+          return load().then(function () {
+            status.textContent = 'Kuva poistettu.';
+          });
+        }, function (error) {
+          if (error.status === 409) {
+            status.textContent = 'Kuva "' + displayName(image) + '" on käytössä reseptissä, joten sitä ei voi poistaa.';
+          } else if (error.status === 404) {
+            load();
+          } else if (error.status !== 401) {
+            status.textContent = messageFor(error, 'Kuvan poistaminen epäonnistui.');
+          }
+        });
+      }
+
+      // Touch: holding an image opens this menu.
+      function openMenu(image) {
+        var title = document.createElement('p');
+        title.className = 'gallery-menu-title';
+        title.textContent = displayName(image);
+        var options = [
+          { text: 'Käytä kuvaa', action: function () { finish(image); } },
+          { text: 'Kuvan tiedot', action: function () { closeMenu(); select(image, true); } },
+          { text: 'Poista', danger: true, action: function () { deleteImage(image); } },
+          { text: 'Peruuta', action: closeMenu }
+        ];
+        var buttons = options.map(function (option) {
+          var item = document.createElement('button');
+          item.type = 'button';
+          item.setAttribute('role', 'menuitem');
+          item.className = 'gallery-menu-item' + (option.danger ? ' is-danger' : '');
+          item.textContent = option.text;
+          if (option.danger && image.used > 0) {
+            item.disabled = true;
+            item.textContent = 'Poista (käytössä reseptissä)';
+          }
+          item.addEventListener('click', option.action);
+          return item;
+        });
+        menu.replaceChildren.apply(menu, [title].concat(buttons));
+        menu.hidden = false;
+        buttons[0].focus();
+      }
+
+      function closeMenu() {
+        menu.hidden = true;
+      }
+      menu.addEventListener('click', function (event) {
+        if (event.target === menu) {
+          closeMenu();  // A tap outside the options.
+        }
+      });
+
+      function createTile(image) {
+        var tile = document.createElement('div');
+        tile.className = 'gallery-tile';
+
+        var thumb = document.createElement('button');
+        thumb.type = 'button';
+        thumb.className = 'gallery-thumb';
+        thumb.dataset.id = String(image.id);
+        thumb.setAttribute('role', 'option');
+        thumb.setAttribute('aria-selected', String(image.id === selectedId));
+        thumb.setAttribute('aria-label', displayName(image) + '. Kaksoisnapsautus valitsee.');
+        var img = document.createElement('img');
+        img.src = image.url;
+        img.alt = '';
+        img.loading = 'lazy';
+        img.draggable = false;
+        thumb.appendChild(img);
+
+        var remove = document.createElement('button');
+        remove.type = 'button';
+        remove.className = 'gallery-thumb-delete';
+        remove.textContent = '✕';
+        remove.tabIndex = -1;  // Keyboard users delete from the info panel or with Delete.
+        remove.setAttribute('aria-label', 'Poista ' + displayName(image));
+        remove.title = image.used > 0 ? 'Käytössä reseptissä, ei voi poistaa' : 'Poista kuva';
+        if (image.used > 0) {
+          remove.classList.add('is-disabled');
+        }
+        remove.addEventListener('click', function (event) {
+          event.stopPropagation();
+          deleteImage(image);
+        });
+
+        // Mouse: click shows details, double click chooses.
+        thumb.addEventListener('click', function () {
+          if (suppressClick) {
+            suppressClick = false;
+            return;
+          }
+          select(image, false);
+        });
+        thumb.addEventListener('dblclick', function () {
+          finish(image);
+        });
+        thumb.addEventListener('keydown', function (event) {
+          if (event.key === 'Delete') {
+            deleteImage(image);
+          }
+        });
+
+        // Touch: tap shows details, double tap chooses, holding opens the menu.
+        var pressTimer = null;
+        var lastTap = 0;
+        var startX = 0;
+        var startY = 0;
+        var suppressClick = false;
+        thumb.addEventListener('pointerdown', function (event) {
+          if (event.pointerType !== 'touch') {
+            return;
+          }
+          startX = event.clientX;
+          startY = event.clientY;
+          pressTimer = window.setTimeout(function () {
+            pressTimer = null;
+            suppressClick = true;
+            openMenu(image);
+          }, LONG_PRESS_MS);
+        });
+        thumb.addEventListener('pointermove', function (event) {
+          if (pressTimer && Math.abs(event.clientX - startX) + Math.abs(event.clientY - startY) > 12) {
+            window.clearTimeout(pressTimer);  // Scrolling, not holding.
+            pressTimer = null;
+          }
+        });
+        thumb.addEventListener('pointerup', function (event) {
+          if (event.pointerType !== 'touch' || !pressTimer) {
+            return;
+          }
+          window.clearTimeout(pressTimer);
+          pressTimer = null;
+          var now = Date.now();
+          if (now - lastTap < DOUBLE_TAP_MS) {
+            suppressClick = true;
+            finish(image);
+            return;
+          }
+          lastTap = now;
+        });
+        thumb.addEventListener('pointercancel', function () {
+          window.clearTimeout(pressTimer);
+          pressTimer = null;
+        });
+        thumb.addEventListener('contextmenu', function (event) {
+          event.preventDefault();  // The hold menu replaces the browser's own.
+        });
+
+        tile.append(thumb, remove);
+        return tile;
+      }
 
       function load() {
         status.textContent = 'Ladataan kuvia…';
-        return api('GET', '/api/images').then(function (images) {
+        return api('GET', '/api/images').then(function (list) {
+          images = list;
           status.textContent = images.length === 0 ? 'Ei vielä kuvia. Lataa ensimmäinen.' : '';
-          grid.replaceChildren.apply(grid, images.map(function (image) {
-            var button = createThumbButton(image);
-            button.addEventListener('click', function () {
-              finish(image);
-            });
-            return button;
-          }));
+          grid.replaceChildren.apply(grid, images.map(createTile));
+          var selected = selectedId !== null ? findImage(selectedId) : null;
+          if (selected) {
+            showInfo(selected);
+          } else {
+            selectedId = null;
+            showEmptyInfo();
+          }
         }, function (error) {
           if (error.status !== 401) {
             status.textContent = messageFor(error, 'Kuvien lataaminen epäonnistui.');
@@ -230,12 +514,13 @@ var KasinGallery = (function () {
           status.textContent = count > 1 ? 'Ladataan kuvaa ' + index + '/' + count + '…' : 'Ladataan kuvaa…';
         }).then(function (outcome) {
           input.value = '';
-          if (outcome.uploaded.length === 1 && outcome.failures.length === 0) {
-            finish(outcome.uploaded[0]);  // A single new image is the one wanted.
-            return;
+          if (outcome.uploaded.length > 0) {
+            selectedId = outcome.uploaded[outcome.uploaded.length - 1].id;  // Show the newest upload.
           }
           return load().then(function () {
-            status.textContent = outcome.failures.join(' ');
+            status.textContent = outcome.failures.length > 0
+              ? outcome.failures.join(' ')
+              : (outcome.uploaded.length === 1 ? 'Kuva ladattu. Kaksoisnapsauta sitä valitaksesi.' : 'Kuvat ladattu.');
           });
         }, function () {
           // Signed out: goToLogin() is already on its way.
@@ -243,6 +528,7 @@ var KasinGallery = (function () {
       });
 
       dialog.showModal();
+      showEmptyInfo();
       load();
     });
   }

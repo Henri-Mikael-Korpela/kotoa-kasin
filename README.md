@@ -283,6 +283,11 @@ drag files onto the page), or straight from the image picker in the editor.
   caching (ids are never reused), and listed in the `images` table.
 - An image that a recipe shows (as its card image or in a block) cannot be
   deleted; the gallery shows how many recipes use each image.
+- In the image picker, a click shows the image's details (name, file type,
+  size, dimensions, upload date, use) in the panel on the right, and a double
+  click chooses it. Hovering over an image shows an X that deletes it. On a
+  touch screen a tap shows the details, a double tap chooses, and holding an
+  image opens a menu: Käytä kuvaa, Kuvan tiedot, Poista.
 
 **Large requests.** Requests normally use each connection's fixed 8 KiB
 buffer. Uploads and long descriptions borrow one of a few 2 MiB buffers that

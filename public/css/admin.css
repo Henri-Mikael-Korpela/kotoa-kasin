@@ -963,9 +963,11 @@ body.is-dragging-block {
 }
 
 .gallery-dialog {
-  width: min(880px, calc(100vw - 32px));
+  position: relative;  /* For the hold menu and the sliding info panel. */
+  width: min(1040px, calc(100vw - 32px));
   max-height: calc(100vh - 48px);
   padding: 0;
+  overflow: hidden;
   border: none;
   border-radius: 4px;
   background: var(--color-bg);
@@ -1002,15 +1004,29 @@ body.is-dragging-block {
   color: var(--color-text-muted);
 }
 
-.gallery-dialog-grid {
-  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+.gallery-dialog-body {
+  display: grid;
+  grid-template-columns: 1fr 290px;
+  gap: 1.2rem;
   padding: 0 1.4rem 1.4rem;
+  min-height: 0;
+}
+
+.gallery-dialog-grid {
+  grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+  align-content: start;
   max-height: calc(100vh - 230px);
   overflow-y: auto;
+  padding: 2px;  /* Room for the selection outline. */
+}
+
+.gallery-tile {
+  position: relative;
 }
 
 .gallery-thumb {
   display: block;
+  width: 100%;
   aspect-ratio: 1;
   padding: 0;
   border: 2px solid transparent;
@@ -1018,18 +1034,242 @@ body.is-dragging-block {
   overflow: hidden;
   background: linear-gradient(135deg, var(--color-sage-light), var(--color-lilac-light));
   cursor: pointer;
+  -webkit-touch-callout: none;  /* Holding opens our menu, not the browser's. */
+  user-select: none;
+  touch-action: manipulation;
 }
 
 .gallery-thumb:hover,
 .gallery-thumb:focus-visible {
-  border-color: var(--color-lilac-dark);
+  border-color: var(--color-lilac);
   outline: none;
+}
+
+.gallery-thumb[aria-selected="true"] {
+  border-color: var(--color-lilac-dark);
+  box-shadow: 0 0 0 2px var(--color-lilac-dark);
 }
 
 .gallery-thumb img {
   width: 100%;
   height: 100%;
   object-fit: cover;
+  pointer-events: none;
+}
+
+/* Delete button in the corner, shown on mouse hover only. */
+.gallery-thumb-delete {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: rgba(43, 42, 37, 0.72);
+  color: var(--color-white);
+  font-size: 0.85rem;
+  line-height: 28px;
+  cursor: pointer;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.15s ease, background-color 0.15s ease;
+}
+
+@media (hover: hover) {
+  .gallery-tile:hover .gallery-thumb-delete {
+    opacity: 1;
+    visibility: visible;
+  }
+}
+
+.gallery-thumb-delete:hover {
+  background: #9b3b3b;
+}
+
+.gallery-thumb-delete.is-disabled {
+  background: rgba(43, 42, 37, 0.4);
+  cursor: not-allowed;
+}
+
+/* Info panel: always on the right on wide screens. */
+.gallery-info {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  max-height: calc(100vh - 230px);
+  overflow-y: auto;
+  padding: 1rem;
+  background: rgba(255, 255, 255, 0.6);
+  border: 1px solid rgba(43, 42, 37, 0.08);
+  border-radius: 3px;
+}
+
+.gallery-info-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 0.8rem;
+}
+
+.gallery-info-header h3 {
+  margin: 0;
+  font-size: 1.15rem;
+}
+
+.gallery-info-close {
+  display: none;
+}
+
+.gallery-info-hint {
+  margin: 0;
+  font-size: 0.9rem;
+}
+
+.gallery-info-preview {
+  aspect-ratio: 4 / 3;
+  margin-bottom: 0.9rem;
+  border-radius: 2px;
+  overflow: hidden;
+  background: linear-gradient(135deg, var(--color-sage-light), var(--color-lilac-light));
+}
+
+.gallery-info-preview img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.gallery-info-list {
+  display: grid;
+  gap: 0.45rem;
+  margin: 0 0 1.1rem;
+}
+
+.gallery-info-list div {
+  display: grid;
+  grid-template-columns: 6.5rem 1fr;
+  gap: 0.5rem;
+  font-size: 0.88rem;
+}
+
+.gallery-info-list dt {
+  color: var(--color-text-muted);
+}
+
+.gallery-info-list dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.gallery-info-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.6rem;
+  margin-top: auto;
+}
+
+.gallery-info-actions .btn {
+  padding: 0.7em 1.3em;
+  font-size: 0.78rem;
+}
+
+/* Hold menu on touch screens. */
+.gallery-menu {
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  padding: 1rem;
+  background: rgba(43, 42, 37, 0.35);
+}
+
+.gallery-menu[hidden] {
+  display: none;
+}
+
+.gallery-menu-title,
+.gallery-menu-item {
+  margin: 0;
+  background: var(--color-bg);
+}
+
+.gallery-menu-title {
+  padding: 0.8rem 1rem 0.5rem;
+  border-radius: 6px 6px 0 0;
+  font-size: 0.8rem;
+  color: var(--color-text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.gallery-menu-item {
+  padding: 0.95rem 1rem;
+  border: none;
+  border-top: 1px solid rgba(43, 42, 37, 0.08);
+  font-family: var(--font-body);
+  font-size: 1rem;
+  text-align: left;
+  color: var(--color-text);
+  cursor: pointer;
+}
+
+.gallery-menu-item:last-child {
+  margin-top: 0.5rem;
+  border-top: none;
+  border-radius: 6px;
+  text-align: center;
+  font-weight: 500;
+}
+
+.gallery-menu-item:nth-last-child(2) {
+  border-radius: 0 0 6px 6px;
+}
+
+.gallery-menu-item.is-danger {
+  color: #9b3b3b;
+}
+
+.gallery-menu-item[disabled] {
+  color: var(--color-text-muted);
+}
+
+@media (max-width: 768px) {
+  .gallery-dialog-body {
+    grid-template-columns: 1fr;
+  }
+
+  .gallery-dialog-grid {
+    grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+  }
+
+  /* On narrow screens the panel slides up when asked for. */
+  .gallery-info {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 9;
+    max-height: 75%;
+    border-radius: 8px 8px 0 0;
+    background: var(--color-bg);
+    box-shadow: 0 -10px 30px rgba(43, 42, 37, 0.25);
+    transform: translateY(105%);
+    transition: transform 0.25s ease;
+  }
+
+  .gallery-info.is-open {
+    transform: translateY(0);
+  }
+
+  .gallery-info-close {
+    display: inline-block;
+  }
 }
 
 @media (max-width: 768px) {
