@@ -85,7 +85,7 @@
 #define LISTEN_BACKLOG    1024
 #define IDLE_TIMEOUT_SEC  15
 #define MAX_PATH_LEN      1024
-#define HEAD_RESERVE      512   // Room in front of an in-place body for its head.
+#define HEAD_RESERVE      1024  // Room in front of an in-place body for its head (about 700 bytes at most).
 #define TOKEN_LIFETIME_SEC (8 * 60 * 60)
 
 static_assert (RESP_BUF_SIZE >= 4 * HEAD_RESERVE, "RESP_BUF_SIZE too small");
@@ -314,6 +314,31 @@ static Str status_reason(int status) {
     }
 }
 
+/*
+ * Security headers, sent with every response.
+ *
+ * The session token lives in the browser's localStorage, so any script that
+ * got injected into a page could read it. The Content-Security-Policy is the
+ * safety net: the pages have no inline scripts or styles, and load scripts,
+ * styles, images and API calls only from this site (plus Google Fonts), so an
+ * injected <script>, inline handler or style, or a request to another site
+ * does not run. blob: images are the upload preview of browsers without
+ * createImageBitmap(). frame-ancestors and X-Frame-Options (for older
+ * browsers) keep other sites from framing the pages to trick clicks;
+ * nosniff keeps browsers from reading an upload as anything but its declared
+ * type. HSTS makes browsers use HTTPS for the site for a year; they ignore it
+ * over plain HTTP, such as the dev server.
+ */
+static Str const SECURITY_HEADERS = STR_INIT(
+    "Content-Security-Policy: default-src 'self'; script-src 'self'; "
+    "style-src 'self' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; "
+    "img-src 'self' blob:; connect-src 'self'; object-src 'none'; base-uri 'none'; "
+    "form-action 'self'; frame-ancestors 'none'\r\n"
+    "X-Content-Type-Options: nosniff\r\n"
+    "X-Frame-Options: DENY\r\n"
+    "Referrer-Policy: strict-origin-when-cross-origin\r\n"
+    "Strict-Transport-Security: max-age=31536000\r\n");
+
 /**
  * Appends a status line and the common headers, up to and including the blank line.
  */
@@ -330,6 +355,7 @@ static void write_head(Str_Builder *b, Conn const *c, int status, Str ctype,
     str_builder_append(b, STR("\r\nConnection: "));
     str_builder_append(b, c->keepalive ? STR("keep-alive") : STR("close"));
     str_builder_append(b, STR("\r\n"));
+    str_builder_append(b, SECURITY_HEADERS);
     str_builder_append(b, extra_headers);
     str_builder_append(b, STR("\r\n"));
 }
