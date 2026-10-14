@@ -4,6 +4,10 @@
 # JavaScript in js/ and CSS in css/ need no restart: watchers rebuild the bundles in
 # public/js and public/css on every save (see the container log); reload the page.
 # The recipe database lives in the db-data volume and survives restarts.
+# The admin password: put the line printed by
+#   docker compose -f dev.docker-compose.yml exec httpd /build/kasin-passwd
+# in a file named .env next to this one (never committed), then restart. Without
+# it the site runs but nobody can log in.
 # Deploy to Azure with:  docker exec -it kotoa-kasin-deploy deploy  (see README.md)
 services:
   httpd:
@@ -17,6 +21,9 @@ services:
       - .:/app
       - build-cache:/build        # keep build output off the Windows bind mount
       - db-data:/data            # SQLite needs real file locking; keep it off the bind mount too
+    environment:
+      # Read from .env by Compose; empty when there is none.
+      KASIN_ADMIN_PASSWORD_HASH: ${KASIN_ADMIN_PASSWORD_HASH:-}
     working_dir: /app
     command: >
       sh -c "cmake -S /app -B /build -DCMAKE_BUILD_TYPE=Release &&

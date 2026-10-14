@@ -50,6 +50,7 @@
 #include "arena.h"
 #include "db.h"
 #include "jwt.h"
+#include "password.h"
 #include "sha256.h"
 #include "str.h"
 
@@ -137,9 +138,14 @@ static int ROOT_FD = -1;  // Directory static files are served from.
 static int UPLOADS_FD = -1;  // Directory uploaded images are stored in.
 static uint8_t JWT_KEY[SHA256_DIGEST_SIZE];  // Signs session tokens.
 
-// Fixed admin credentials for now.
 static Str const ADMIN_USERNAME = STR_INIT("hanna");
-static Str const ADMIN_PASSWORD = STR_INIT("koti");
+
+/*
+ * The admin password, as a salted, slow hash read from KASIN_ADMIN_PASSWORD_HASH
+ * at startup (see password.h and kasin-passwd). Without it nobody can log in.
+ */
+static Password_Hash ADMIN_PASSWORD_HASH;
+static bool LOGIN_ENABLED = false;
 
 /*
  * Large buffers. A few per worker are reserved at startup and lent to one
@@ -672,14 +678,19 @@ static void api_login(Worker *w, Conn *c, Request const *r) {
     str_builder_init(&username, username_buf, sizeof username_buf);
     str_builder_init(&password, password_buf, sizeof password_buf);
 
+    if (!LOGIN_ENABLED) {
+        respond_json_error(c, 503, STR("login is not configured"), NO_STORE);
+        return;
+    }
     Db_Status status = db_parse_login(&w->db, r->body, &username, &password);
     if (status != DB_OK) {
         respond_db_error(c, status);
         return;
     }
-    // Compare both fields every time so timing does not reveal which was wrong.
+    // Check both fields every time so timing does not reveal which was wrong.
     bool user_ok = str_eq_constant_time(str_builder_str(&username), ADMIN_USERNAME);
-    bool password_ok = str_eq_constant_time(str_builder_str(&password), ADMIN_PASSWORD);
+    bool password_ok = password_verify(str_builder_str(&password), &ADMIN_PASSWORD_HASH);
+    explicit_bzero(password_buf, sizeof password_buf);
     if (!(user_ok & password_ok)) {
         respond_json_error(c, 401, STR("invalid username or password"),
                            STR("Cache-Control: no-store\r\nWWW-Authenticate: Bearer\r\n"));
@@ -1697,6 +1708,19 @@ int main(int argc, char **argv) {
     } else if (getrandom(JWT_KEY, sizeof JWT_KEY, 0) != (ssize_t)sizeof JWT_KEY) {
         perror("getrandom");
         return EX_OSERR;
+    }
+
+    // A missing hash leaves the site running with logins off; a malformed one is a mistake.
+    Str password_hash = str_from_cstr(getenv("KASIN_ADMIN_PASSWORD_HASH"));
+    if (password_hash.len == 0) {
+        fprintf(stderr, "warning: KASIN_ADMIN_PASSWORD_HASH is not set, so nobody can log in; "
+                        "make one with kasin-passwd (see README.md)\n");
+    } else if (password_hash_parse(str_trim(password_hash), &ADMIN_PASSWORD_HASH)) {
+        LOGIN_ENABLED = true;
+    } else {
+        fprintf(stderr, "KASIN_ADMIN_PASSWORD_HASH is not a hash made by kasin-passwd "
+                        "(pbkdf2-sha256:<iterations>:<salt>:<hash>)\n");
+        return EX_CONFIG;
     }
 
     // SQLite gets a fixed heap out of the same reservation.

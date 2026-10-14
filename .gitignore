@@ -2,3 +2,9 @@
 # (see js/bundles.txt and css/bundles.txt).
 public/js/
 public/css/
+
+# Admin password hashes (KASIN_ADMIN_PASSWORD_HASH): .env for local development,
+# deploy/secrets.env for Azure. A salted hash is still guessable offline, so it
+# stays out of version control.
+.env
+deploy/secrets.env

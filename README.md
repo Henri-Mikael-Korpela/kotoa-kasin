@@ -19,7 +19,24 @@ docker compose -f dev.docker-compose.yml up --build
 ```
 
 Then open <http://localhost:8080>. The admin view is at
-<http://localhost:8080/hallinta>; the login is `hanna` / `koti`.
+<http://localhost:8080/hallinta>, with the user name `hanna` and the password
+you set as follows. Until you do, the site runs but nobody can log in.
+
+1. Make the password hash into a file named `.env` next to
+   `dev.docker-compose.yml`. `kasin-passwd -g` makes a strong random password,
+   shows it once and writes only its hash to the file (PowerShell):
+
+   ```powershell
+   docker compose -f dev.docker-compose.yml exec -T httpd /build/kasin-passwd -g | Out-File -Encoding ascii .env
+   ```
+
+   To choose the password yourself, run `docker compose -f dev.docker-compose.yml
+   exec httpd /build/kasin-passwd` instead: it asks twice (at least 12
+   characters; a few unrelated words work well) and prints a
+   `KASIN_ADMIN_PASSWORD_HASH=...` line to paste into `.env`.
+2. Restart: `docker compose -f dev.docker-compose.yml up -d`.
+
+`.env` is in `.gitignore`; never commit it. See [Admin password](#admin-password).
 
 - The server is compiled inside the container when it starts. After changing C
   code, run `docker compose -f dev.docker-compose.yml restart httpd`.
@@ -78,8 +95,17 @@ script create a second set rather than rename the first.
 
 ### Deploy
 
-```sh
+Before the first deployment, make the live site's admin password hash and save
+it in `deploy/secrets.env` (never committed; see [Admin password](#admin-password)):
+
+```powershell
 docker compose -f dev.docker-compose.yml up -d
+docker compose -f dev.docker-compose.yml exec -T httpd /build/kasin-passwd -g | Out-File -Encoding ascii deploy/secrets.env
+```
+
+`-g` shows the new random password once; keep it in a password manager. Then:
+
+```sh
 docker exec -it kotoa-kasin-deploy deploy
 ```
 
@@ -111,9 +137,9 @@ All in the resource group from `deploy/config.env` (default `kotoa-kasin`):
 
 ### After the first deployment
 
-- **Change the admin password.** The login is still the hard-coded
-  `hanna` / `koti`, set as `ADMIN_USERNAME` and `ADMIN_PASSWORD` in
-  `src/main.c`. Change them and deploy again before sharing the address.
+- **Admin password:** the live site uses the hash in `deploy/secrets.env`
+  (see [Admin password](#admin-password)). To change it, put a new hash there and
+  deploy again.
 - **The database starts from the seeded recipes** (migration `0002`). Recipes from your local
   database are not copied. It is stored on the file share with `-s share`
   (see Server options below).
@@ -160,6 +186,41 @@ portal before deploying.
 | The site hangs and `az containerapp logs show` prints `db: database is locked` | The database is on the file share but the server was not started with `-s share`, so SQLite used POSIX locks the share does not support. The production `Dockerfile` already passes `-s share`; redeploy. |
 | `deploy` reports no healthy answer at the end | Look at the log with `az containerapp logs show ... --follow`; the app may still be starting. |
 | `docker exec` says the container is not running | The tooling container is stopped. Start it with `docker compose -f dev.docker-compose.yml up -d`. |
+
+## Admin password
+
+The admin logs in as `hanna` with a password that is never stored anywhere:
+the server only knows a salted, slow hash of it (PBKDF2-HMAC-SHA256, 600,000
+iterations, a random 16-byte salt), given in the environment variable
+`KASIN_ADMIN_PASSWORD_HASH`:
+
+```
+KASIN_ADMIN_PASSWORD_HASH=pbkdf2-sha256:<iterations>:<salt>:<hash>
+```
+
+- **Making a hash:** `kasin-passwd` (built with the server) asks for the
+  password twice and prints the line above; `kasin-passwd -g` makes a strong
+  random password instead and shows it once. In the dev container:
+  `docker compose -f dev.docker-compose.yml exec httpd /build/kasin-passwd`.
+  When writing its output to a file, pass `-T` to `exec`: without it the shown
+  password would end up in the file too. In Windows PowerShell 5.1 use
+  `| Out-File -Encoding ascii <file>` rather than `>`, which writes UTF-16 that
+  Compose cannot read. In Git Bash, prefix the command with `MSYS_NO_PATHCONV=1`
+  so `/build/...` is not turned into a Windows path.
+- **Local development:** the line goes in `.env` next to
+  `dev.docker-compose.yml`; Compose passes it to the server.
+- **Azure:** the line goes in `deploy/secrets.env`. `deploy` stores it as the
+  Container Apps secret `admin-password-hash`, which the app reads as
+  `KASIN_ADMIN_PASSWORD_HASH`. The first deployment needs it; later ones keep the
+  stored secret unless the file holds a hash (then it is replaced). Use a
+  different, strong password for the live site than for local development.
+- **Never commit either file;** both are in `.gitignore`. A salted, slow hash
+  is still open to guessing by anyone who has it, only slowly.
+- **Without the variable** the site runs, logins answer 503 and the log says
+  why. A malformed value stops the server at startup (exit code 78).
+
+Each login takes about 0.7 seconds of processor time on a desktop computer (and
+a few seconds on the smallest Azure size): that is what makes guessing slow.
 
 ## Database migrations
 

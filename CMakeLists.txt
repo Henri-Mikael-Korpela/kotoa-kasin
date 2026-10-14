@@ -29,6 +29,7 @@ add_executable(kasin-httpd
   src/db.c
   src/jwt.c
   src/migrate.c
+  src/password.c
   src/sha256.c
   src/sql.c
   src/str.c)
@@ -41,6 +42,14 @@ target_compile_definitions(kasin-httpd PRIVATE
   BIG_BUFS_PER_WORKER=${KASIN_BIG_BUFS_PER_WORKER}
   DB_HEAP_SIZE=${KASIN_DB_HEAP_SIZE})
 target_link_libraries(kasin-httpd PRIVATE Threads::Threads SQLite::SQLite3)
+
+# Makes the admin password hash for KASIN_ADMIN_PASSWORD_HASH.
+add_executable(kasin-passwd
+  src/passwd.c
+  src/password.c
+  src/sha256.c
+  src/str.c)
+target_compile_options(kasin-passwd PRIVATE -Wall -Wextra -Wpedantic)
 
 # Build the bundles in public/js and public/css from the sources in js/ and css/
 # (see js/bundles.txt and css/bundles.txt). bundler.c is what they share.
@@ -74,3 +83,11 @@ add_executable(cssmin-test
   src/str.c)
 target_compile_options(cssmin-test PRIVATE -Wall -Wextra -Wpedantic)
 add_test(NAME cssmin COMMAND cssmin-test)
+
+add_executable(password-test
+  tests/password_test.c
+  src/password.c
+  src/sha256.c
+  src/str.c)
+target_compile_options(password-test PRIVATE -Wall -Wextra -Wpedantic)
+add_test(NAME password COMMAND password-test)
