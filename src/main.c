@@ -42,6 +42,7 @@
 #include <sys/sendfile.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
+#include <sys/syscall.h>
 #include <sysexits.h>
 #include <time.h>
 #include <unistd.h>
@@ -406,13 +407,69 @@ static Str const WELCOME = STR_INIT(
     "<!doctype html><meta charset=utf-8><title>kasin-httpd</title>"
     "<h1>kasin-httpd is running</h1><p>Put files in the served directory.</p>\n");
 
+/*
+ * openat2() is used through syscall(): libc headers do not all declare it, and
+ * Alpine's need an extra package for <linux/openat2.h>. The number and the
+ * struct layout are the same on every architecture.
+ */
+#ifndef SYS_openat2
+#define SYS_openat2 437
+#endif
+#define RESOLVE_NO_SYMLINKS_FLAG 0x04
+#define RESOLVE_BENEATH_FLAG     0x08
+
+typedef struct {
+    uint64_t flags;
+    uint64_t mode;
+    uint64_t resolve;
+} Open_How;
+
+/**
+ * Opens a file for reading inside a directory, and never outside it.
+ *
+ * The kernel resolves the path with RESOLVE_BENEATH and RESOLVE_NO_SYMLINKS:
+ * an absolute path, ".." or a symbolic link anywhere on the way is refused,
+ * however the path was put together. On a kernel without openat2() (before
+ * Linux 5.6, or one that filters the call) the same rules are checked here
+ * instead, apart from symbolic links in the middle of the path.
+ *
+ * @return The descriptor, or -1 with errno set; a path that would leave the
+ *         directory fails with ENOENT, like a missing file.
+ */
+static int open_beneath(int dir_fd, char const *path) {
+    int const flags = O_RDONLY | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK;
+    Open_How how = {
+        .flags = (uint64_t)flags,
+        .mode = 0,
+        .resolve = RESOLVE_BENEATH_FLAG | RESOLVE_NO_SYMLINKS_FLAG,
+    };
+    long fd = syscall(SYS_openat2, dir_fd, path, &how, sizeof how);
+    if (fd >= 0) {
+        return (int)fd;
+    }
+    if (errno == EXDEV || errno == ELOOP) {
+        errno = ENOENT;  // The path tried to leave the directory.
+        return -1;
+    }
+    if (errno != ENOSYS && errno != EPERM) {
+        return -1;
+    }
+
+    Str const p = str_from_cstr(path);
+    if (p.len == 0 || p.data[0] == '/' || str_contains(p, STR(".."))) {
+        errno = ENOENT;
+        return -1;
+    }
+    return openat(dir_fd, path, flags);
+}
+
 /**
  * Opens a path under the docroot and stats it.
  *
  * @return The descriptor, or -1 with errno set.
  */
 static int open_in_root(Str rel_path, struct stat *st) {
-    char rel_path_z[MAX_PATH_LEN];  // openat() needs a NUL-terminated path.
+    char rel_path_z[MAX_PATH_LEN];  // openat2() needs a NUL-terminated path.
     if (ROOT_FD < 0) {
         errno = ENOENT;
         return -1;
@@ -421,7 +478,7 @@ static int open_in_root(Str rel_path, struct stat *st) {
         errno = ENAMETOOLONG;
         return -1;
     }
-    int fd = openat(ROOT_FD, rel_path_z, O_RDONLY | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK);
+    int fd = open_beneath(ROOT_FD, rel_path_z);
     if (fd < 0) {
         return -1;
     }
@@ -502,16 +559,14 @@ static void serve_file(Conn *c, int status, Str rel_path, bool head_only, bool i
  * reused, so the file at a URL never changes and may be cached for good.
  */
 static void serve_upload(Conn *c, Str file_name, bool head_only) {
-    char name_z[64];  // openat() needs a NUL-terminated name.
+    char name_z[64];  // openat2() needs a NUL-terminated name.
     Str number;
     Str extension;
     uint64_t id;
     bool valid = str_split_once(file_name, STR("."), &number, &extension) &&
                  str_to_u64(number, &id) && str_find_char(extension, '.') == STR_NPOS &&
                  str_to_cstr(file_name, name_z, sizeof name_z);
-    int fd = valid && UPLOADS_FD >= 0
-             ? openat(UPLOADS_FD, name_z, O_RDONLY | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK)
-             : -1;
+    int fd = valid && UPLOADS_FD >= 0 ? open_beneath(UPLOADS_FD, name_z) : -1;
     struct stat st;
     if (fd < 0 || fstat(fd, &st) < 0 || !S_ISREG(st.st_mode)) {
         if (fd >= 0) {
@@ -1191,11 +1246,16 @@ static int build_response(Worker *w, Conn *c) {
     }
 
     /*
-     * No percent-decoding: reject anything that could escape the root.
-     * The set below is length-based, so it includes the NUL byte too.
+     * No percent-decoding: reject anything that could escape the root. An
+     * empty segment ("//") is refused too: with the leading "/" dropped, the
+     * path "//etc/passwd" would be the absolute path "/etc/passwd". Files are
+     * also opened with open_beneath(), which keeps them inside the root even if
+     * a path got past this check. The set below is length-based, so it
+     * includes the NUL byte too.
      */
     if (r.path.len == 0 || r.path.data[0] != '/' || r.path.len >= MAX_PATH_LEN - 16 ||
-        str_find_any(r.path, STR("%\\\0")) != STR_NPOS || str_contains(r.path, STR(".."))) {
+        str_find_any(r.path, STR("%\\\0")) != STR_NPOS || str_contains(r.path, STR("..")) ||
+        str_contains(r.path, STR("//"))) {
         respond_error(c, 400, r.head_only);
         goto done;
     }
