@@ -27,7 +27,10 @@ add_executable(kasin-httpd
   src/arena.c
   src/buddy.c
   src/db.c
+  src/geoip.c
+  src/ip.c
   src/jwt.c
+  src/login_guard.c
   src/migrate.c
   src/password.c
   src/sha256.c
@@ -50,6 +53,13 @@ add_executable(kasin-passwd
   src/sha256.c
   src/str.c)
 target_compile_options(kasin-passwd PRIVATE -Wall -Wextra -Wpedantic)
+
+# Makes the server's country file from DB-IP's CSV (see scripts/fetch-geoip).
+add_executable(kasin-geoip
+  src/geoip_tool.c
+  src/geoip_build.c
+  src/str.c)
+target_compile_options(kasin-geoip PRIVATE -Wall -Wextra -Wpedantic)
 
 # Build the bundles in public/js and public/css from the sources in js/ and css/
 # (see js/bundles.txt and css/bundles.txt). bundler.c is what they share.
@@ -91,3 +101,21 @@ add_executable(password-test
   src/str.c)
 target_compile_options(password-test PRIVATE -Wall -Wextra -Wpedantic)
 add_test(NAME password COMMAND password-test)
+
+add_executable(login-guard-test
+  tests/login_guard_test.c
+  src/login_guard.c
+  src/ip.c
+  src/str.c)
+target_compile_options(login-guard-test PRIVATE -Wall -Wextra -Wpedantic)
+target_link_libraries(login-guard-test PRIVATE Threads::Threads)
+add_test(NAME login-guard COMMAND login-guard-test)
+
+add_executable(geoip-test
+  tests/geoip_test.c
+  src/geoip.c
+  src/geoip_build.c
+  src/ip.c
+  src/str.c)
+target_compile_options(geoip-test PRIVATE -Wall -Wextra -Wpedantic)
+add_test(NAME geoip COMMAND geoip-test)

@@ -25,12 +25,19 @@ services:
       # Read from .env by Compose; empty when there is none.
       KASIN_ADMIN_PASSWORD_HASH: ${KASIN_ADMIN_PASSWORD_HASH:-}
     working_dir: /app
+    # Countries of login attempts: DB-IP's data is downloaded once into the
+    # build-cache volume and again when over a month old. Without a network
+    # the server still runs, recording attempts without countries.
     command: >
       sh -c "cmake -S /app -B /build -DCMAKE_BUILD_TYPE=Release &&
              cmake --build /build -j &&
+             { find /build/geoip.bin -mtime -31 2>/dev/null | grep -q . ||
+               { sh /app/scripts/fetch-geoip /build/geoip.csv &&
+                 /build/kasin-geoip /build/geoip.csv /build/geoip.bin; rm -f /build/geoip.csv; } ||
+               echo 'warning: no country data for login attempts'; } &&
              { /build/kasin-jsbundle -w -o /app/public/js /app/js/bundles.txt &
                /build/kasin-cssbundle -w -o /app/public/css /app/css/bundles.txt &
-               exec /build/kasin-httpd -p 8080 -r /app/public -d /data/kotoa.db -m /app/migrations -u /data/uploads; }"
+               exec /build/kasin-httpd -p 8080 -r /app/public -d /data/kotoa.db -m /app/migrations -u /data/uploads -g /build/geoip.bin; }"
 
   # Deployment tooling: the official Azure CLI image, idling until you run
   # `docker exec -it kotoa-kasin-deploy deploy`. The repo is mounted read-only;

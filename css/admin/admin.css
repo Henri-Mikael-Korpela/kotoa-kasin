@@ -2046,3 +2046,194 @@ body[data-page="edit"] .preview-pane {
     padding: 0.6rem 16px 0.8rem;
   }
 }
+
+/* ---------------------------------------------------
+   Login attempts page (Kirjautumiset)
+--------------------------------------------------- */
+
+.logins-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1rem;
+  margin: 0 0 3rem;
+}
+
+.logins-summary > div {
+  background: rgba(255, 255, 255, 0.55);
+  border: 1px solid rgba(43, 42, 37, 0.08);
+  border-radius: 3px;
+  padding: 1.1rem 1.3rem;
+}
+
+.logins-summary dt {
+  font-size: 0.72rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--color-lilac-dark);
+}
+
+.logins-summary dd {
+  margin: 0.3rem 0 0;
+  font-family: var(--font-heading);
+  font-size: 2rem;
+  line-height: 1.1;
+}
+
+.logins-section {
+  margin-bottom: 3rem;
+}
+
+.logins-section h2 {
+  font-size: 1.5rem;
+  margin: 0 0 0.8rem;
+}
+
+.logins-section-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.4rem 1.5rem;
+  margin-bottom: 0.8rem;
+}
+
+.logins-section-header h2 {
+  margin: 0;
+}
+
+.logins-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5em;
+  font-size: 0.88rem;
+  cursor: pointer;
+}
+
+/* Wide tables scroll on their own on narrow screens; the page does not. */
+.logins-table-wrap {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.logins-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.88rem;
+  background: rgba(255, 255, 255, 0.55);
+  border: 1px solid rgba(43, 42, 37, 0.08);
+}
+
+.logins-table th {
+  text-align: left;
+  font-weight: 500;
+  font-size: 0.7rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--color-lilac-dark);
+  padding: 0.75rem 0.9rem;
+  border-bottom: 1px solid rgba(43, 42, 37, 0.12);
+  white-space: nowrap;
+}
+
+.logins-table td {
+  padding: 0.65rem 0.9rem;
+  border-bottom: 1px solid rgba(43, 42, 37, 0.06);
+  vertical-align: middle;
+  white-space: nowrap;
+}
+
+.logins-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.logins-table tr.is-success td {
+  color: var(--color-text-muted);
+}
+
+.logins-country {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45em;
+}
+
+.logins-country.is-unknown {
+  color: var(--color-text-muted);
+}
+
+.logins-flag {
+  font-size: 1.15em;
+  line-height: 1;
+}
+
+.logins-agent {
+  display: inline-block;
+  max-width: 28ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: bottom;
+  color: var(--color-text-muted);
+}
+
+.logins-badge {
+  display: inline-block;
+  font-size: 0.7rem;
+  letter-spacing: 0.04em;
+  padding: 0.1em 0.55em;
+  border-radius: 999px;
+  background: var(--color-sage-light);
+  color: var(--color-text);
+}
+
+.logins-attribution {
+  font-size: 0.8rem;
+  color: var(--color-text-muted);
+}
+
+.logins-attribution a {
+  color: inherit;
+  text-decoration: underline;
+}
+
+@media (max-width: 768px) {
+  .logins-summary {
+    grid-template-columns: 1fr;
+    gap: 0.6rem;
+  }
+
+  .logins-summary > div {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 1rem;
+  }
+
+  .logins-summary dd {
+    font-size: 1.5rem;
+    margin: 0;
+  }
+}
+
+/* Phones: the header keeps one line. The logo goes first when space runs out;
+   "Reseptit" leads to the same page. */
+@media (max-width: 768px) {
+  .admin-header .logo,
+  .admin-nav a,
+  .admin-nav button {
+    white-space: nowrap;
+  }
+
+  .admin-nav {
+    gap: 0.9rem;
+  }
+}
+
+@media (max-width: 480px) {
+  .admin-header .logo {
+    display: none;
+  }
+
+  .admin-nav {
+    width: 100%;
+    justify-content: space-between;
+  }
+}

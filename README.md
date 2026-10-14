@@ -222,6 +222,73 @@ KASIN_ADMIN_PASSWORD_HASH=pbkdf2-sha256:<iterations>:<salt>:<hash>
 Each login takes about 0.7 seconds of processor time on a desktop computer (and
 a few seconds on the smallest Azure size): that is what makes guessing slow.
 
+## Login protection
+
+Wrong passwords are slowed down and then refused, per client address, the same
+way locally and on Azure:
+
+| Failures in a row | Before the next attempt |
+|---|---|
+| 1-3 | No wait |
+| 4-9 | 2, 4, 8, 16, 32, then 60 seconds |
+| 10 | Banned for 15 minutes |
+
+- A successful login forgets the address's failures; so do 15 minutes without
+  a new one.
+- A refused attempt gets `429 Too Many Requests` with `Retry-After` at once,
+  without checking the password; the login page shows how long to wait and
+  counts down.
+- At most 6 passwords are checked per minute in all, from every address
+  together, because each check is slow on purpose (see
+  [Admin password](#admin-password)). Banned addresses do not use up checks.
+  An attacker with very many addresses can therefore delay the admin's login
+  by up to a minute, but cannot overload the server.
+- The limits are kept in memory, shared by all the server's threads, and
+  rebuilt from the database at startup, so a restart (or Azure scaling the app
+  to zero) does not lift a ban.
+
+**Client address.** Locally it is the address the connection comes from (in
+Docker, the Docker network's gateway, such as `172.18.0.1`, for every browser).
+On Azure the connection comes from the ingress proxy, which adds the client's
+address to `X-Forwarded-For`; the deployment sets `KASIN_TRUST_PROXY=1`, and
+the server then uses that header's last entry, the one the proxy added.
+Without the setting the header is ignored, since any client can send one.
+
+**Logs.** Every checked password is logged, and refusals at most once a minute
+per address, so attacks show in `az containerapp logs show` (and locally in
+`docker compose -f dev.docker-compose.yml logs -f httpd`):
+
+```
+login: FAILED for "admin" from 193.166.3.2 (FI); 4 recent failures, next attempt allowed in 2 s
+login: refused attempt from 193.166.3.2 (FI): must wait after 4 failures, 2 s more (1 refused since the last such line)
+login: success for "hanna" from 87.95.0.1 (FI)
+```
+
+**Kirjautumiset** (`/hallinta/kirjautumiset`) shows the addresses that must
+wait or are banned (with a button to lift the block), the latest attempts with
+time, address, country, user name tried and browser, and every address that
+has tried to log in. Each address is stored once as a client (`login_clients`:
+address, country, first and last seen) and each checked password as an attempt
+of that client (`login_attempts`). Records older than 90 days are removed.
+
+Locally every browser, phones included, comes in through the same Docker
+gateway address, so a lockout applies to all of them. Wait 15 minutes, or lift
+all blocks and restart:
+
+```sh
+docker compose -f dev.docker-compose.yml exec httpd sqlite3 /data/kotoa.db "UPDATE login_clients SET cleared_at = strftime('%s', 'now')"
+docker compose -f dev.docker-compose.yml restart httpd
+```
+
+**Countries** come from DB-IP's free "IP to Country Lite" database (CC BY 4.0;
+credited on the Kirjautumiset page). It is looked up on the server, so no
+address is sent anywhere. `scripts/fetch-geoip` downloads the monthly CSV and
+`kasin-geoip` turns it into a compact file (8 MB) that the server maps into
+memory (`-g`). The production image fetches the latest data at every build;
+the dev container fetches it once and again when it is over a month old (kept
+in the `build-cache` volume). Without the data, attempts are recorded without
+countries. Private and reserved addresses have no country.
+
 ## Database migrations
 
 The database structure is defined by SQL files in `migrations/`, applied in
@@ -434,23 +501,32 @@ kasin-cssbundle -w -o public/css css/bundles.txt   # keep running, rebuild on ch
 
 | Path | Contents |
 |---|---|
-| `src/` | The server: `main.c` (HTTP, routing, API), `db.c` (SQLite), `migrate.c` (migration runner), `sql.c` (SQLite helpers), `jwt.c`, `sha256.c`, `str.c`, `arena.c`, `buddy.c`. Also the bundlers: `bundler.c` (shared: manifest, files, watch mode), `jsbundle.c` and `jsmin.c` (JavaScript), `cssbundle.c` and `cssmin.c` (CSS) |
-| `tests/` | `jsmin_test.c` and `cssmin_test.c`, tests for the minifiers (`ctest`) |
+| `src/` | The server: `main.c` (HTTP, routing, API), `db.c` (SQLite), `migrate.c` (migration runner), `sql.c` (SQLite helpers), `jwt.c`, `sha256.c`, `password.c` (password hashes), `login_guard.c` (login protection), `ip.c` (client addresses), `geoip.c` (countries), `str.c`, `arena.c`, `buddy.c`. Tools: `passwd.c` (`kasin-passwd`), `geoip_tool.c` and `geoip_build.c` (`kasin-geoip`), and the bundlers: `bundler.c` (shared: manifest, files, watch mode), `jsbundle.c` and `jsmin.c` (JavaScript), `cssbundle.c` and `cssmin.c` (CSS) |
+| `tests/` | Unit tests, run with `ctest`: minifiers, password hashes, login protection, addresses and countries |
+| `scripts/` | `fetch-geoip`, which downloads the country data |
 | `js/` | JavaScript sources and `bundles.txt`: `shared/blocks.js` is the block format, `site/main.js` the public site, `admin/admin.js` the admin pages, `admin/editor.js` the editor, `admin/gallery.js` the image gallery |
 | `migrations/` | Database migrations, `<number>__<name>.sql` |
 | `css/` | CSS sources and `bundles.txt`: `shared/style.css` is the site's style, `admin/admin.css` the admin view's |
 | `public/` | The site: pages, `assets/`, and the generated bundles in `js/` and `css/`; `hallinta/` holds the admin pages |
 | `Dockerfile` | Production image (used for Azure) |
 | `Dockerfile.dev`, `dev.docker-compose.yml` | Local development and the deployment tooling container |
-| `deploy/` | `bin/deploy` (the deployment script) and `config.env` (its settings) |
+| `deploy/` | `bin/deploy` (the deployment script), `config.env` (its settings) and `secrets.env` (the live admin password hash; not in version control) |
 | `CLAUDE.md` | C code style rules for this project |
 
 ### Server options
 
 ```
 kasin-httpd [-p port] [-t threads] [-r docroot] [-d database] [-m migrations]
-            [-u uploads] [-s local|share]
+            [-u uploads] [-s local|share] [-g countries]
 ```
+
+`-g` names the country file made by `kasin-geoip` (see
+[Login protection](#login-protection)).
+
+Environment: `KASIN_ADMIN_PASSWORD_HASH` (see [Admin password](#admin-password)),
+`KASIN_JWT_SECRET` (signs sessions; random at each start when unset, which
+logs everyone out on restart) and `KASIN_TRUST_PROXY=1` (take the client
+address from `X-Forwarded-For`; only behind a proxy that sets it).
 
 `-u` names the directory uploaded images are stored in (default `uploads`,
 created if missing).
@@ -472,7 +548,7 @@ Reading is public; changes need a login token (`Authorization: Bearer <token>`).
 
 | Endpoint | Purpose |
 |---|---|
-| `POST /api/login` | `{username, password}` returns `{token, expires_at}` |
+| `POST /api/login` | `{username, password}` returns `{token, expires_at}`. A wrong password: 401 with `retry_after` (seconds before the next attempt). Refused by the [login protection](#login-protection): 429 with `Retry-After` and `{error, reason: "delayed", "banned" or "busy", retry_after}` |
 | `GET /api/session` | Checks the token (login required) |
 | `GET`, `POST /api/recipes` | List (with `excerpt` instead of `description`), create (`slug`, `name`, `image`, `description`, `category_id`; 409 if another recipe has the slug) |
 | `GET`, `PUT`, `DELETE /api/recipes/{id}` | Read, update (409 if another recipe has the slug), delete |
@@ -482,3 +558,5 @@ Reading is public; changes need a login token (`Authorization: Bearer <token>`).
 | `GET /api/images` | List uploaded images with how many recipes use each (`used`) and which ones (`recipes`: `{id, name}`, alphabetically) (login required) |
 | `POST /api/images` | Upload: the raw JPEG, PNG, GIF or WebP file as the body, original name in `X-File-Name` (login required) |
 | `DELETE /api/images/{id}` | Delete (login required; 409 while a recipe shows it) |
+| `GET /api/login-attempts` | `{now, blocked, report: {clients, attempts}}`: addresses waiting or banned now, the 500 addresses seen last and the 300 latest attempts (login required) |
+| `DELETE /api/login-blocks/{client id}` | Lifts an address's wait or ban (login required) |

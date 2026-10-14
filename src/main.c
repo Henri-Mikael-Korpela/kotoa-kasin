@@ -27,6 +27,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <getopt.h>
+#include <arpa/inet.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <pthread.h>
@@ -49,7 +50,10 @@
 
 #include "arena.h"
 #include "db.h"
+#include "geoip.h"
+#include "ip.h"
 #include "jwt.h"
+#include "login_guard.h"
 #include "password.h"
 #include "sha256.h"
 #include "str.h"
@@ -110,6 +114,7 @@ typedef struct Conn {
     off_t         file_pos;  /**< Next byte of file_fd to send. */
     off_t         file_end;  /**< One past last byte of file_fd to send. */
     int64_t       last_active;  /**< Monotonic seconds. */
+    Ip_Address    peer;  /**< The address the connection comes from. */
     struct Conn  *next_free;
     uint8_t      *req;  /**< REQ_BUF_SIZE bytes, lives in the arena. */
     uint8_t      *resp;  /**< RESP_BUF_SIZE bytes, lives in the arena. */
@@ -146,6 +151,16 @@ static Str const ADMIN_USERNAME = STR_INIT("hanna");
  */
 static Password_Hash ADMIN_PASSWORD_HASH;
 static bool LOGIN_ENABLED = false;
+
+static Login_Guard LOGIN_GUARD;  // Brute-force protection, shared by all workers.
+static Geoip GEOIP;  // Countries of addresses; empty when no country file is given.
+
+/*
+ * Whether the server runs behind a proxy that adds the client's address to
+ * X-Forwarded-For (KASIN_TRUST_PROXY=1), like the ingress of Azure Container
+ * Apps. Otherwise the header is ignored, since any client can send one.
+ */
+static bool TRUST_PROXY = false;
 
 /*
  * Large buffers. A few per worker are reserved at startup and lent to one
@@ -286,6 +301,8 @@ static Str status_reason(int status) {
         return STR("Content Too Large");
     case 415:
         return STR("Unsupported Media Type");
+    case 429:
+        return STR("Too Many Requests");
     case 431:
         return STR("Request Header Fields Too Large");
     case 503:
@@ -595,6 +612,8 @@ typedef struct {
     uint64_t content_length;
     Str      authorization;
     Str      file_name;  /**< X-File-Name: an upload's original name, URL-encoded. */
+    Str      forwarded_for;  /**< X-Forwarded-For, trusted only with TRUST_PROXY. */
+    Str      user_agent;
 } Request_Headers;
 
 typedef struct {
@@ -603,6 +622,7 @@ typedef struct {
     Str                    body;
     bool                   head_only;
     Request_Headers const *headers;
+    Ip_Address             client;  /**< The client's address (see TRUST_PROXY). */
 } Request;
 
 /**
@@ -639,6 +659,10 @@ static void scan_headers(Str headers, Request_Headers *h) {
             h->authorization = value;
         } else if (str_eq_nocase(name, STR("x-file-name"))) {
             h->file_name = value;
+        } else if (str_eq_nocase(name, STR("x-forwarded-for"))) {
+            h->forwarded_for = value;
+        } else if (str_eq_nocase(name, STR("user-agent"))) {
+            h->user_agent = value;
         }
     }
 }
@@ -670,20 +694,177 @@ static void respond_unauthorized(Conn *c) {
                        STR("Cache-Control: no-store\r\nWWW-Authenticate: Bearer\r\n"));
 }
 
+static void respond_id(Conn *c, int status, int64_t id) {
+    Str_Builder body;
+    body_begin(c, &body);
+    str_builder_append(&body, STR("{\"id\":"));
+    str_builder_append_u64(&body, (uint64_t)id);
+    str_builder_append(&body, STR("}"));
+    respond_built(c, status, JSON_TYPE, &body, false, NO_STORE);
+}
+
+/**
+ * Who is logging in, for logs and the database: the address in text form and
+ * its country.
+ */
+typedef struct {
+    char        ip_buf[IP_TEXT_SIZE];
+    Str         ip;
+    char        country_buf[2];
+    Str         country;  /**< Empty when unknown. */
+} Login_Client;
+
+static void describe_client(Ip_Address const *address, Login_Client *client) {
+    Str_Builder ip;
+    str_builder_init(&ip, client->ip_buf, sizeof client->ip_buf);
+    ip_format(address, &ip);
+    client->ip = str_builder_str(&ip);
+    client->country = geoip_country(&GEOIP, address, client->country_buf)
+                      ? str_make(client->country_buf, 2)
+                      : STR("");
+}
+
+/**
+ * Copies text for logs and the database: at most capacity bytes, cut at a
+ * character boundary, with control characters (and with ascii_only, any byte
+ * outside ASCII) replaced by "?".
+ */
+static Str clean_text(Str text, char *buf, size_t capacity, bool ascii_only) {
+    size_t len = text.len < capacity ? text.len : capacity;
+    while (len > 0 && len < text.len && ((unsigned char)text.data[len] & 0xC0) == 0x80) {
+        len--;  // Do not split a UTF-8 character.
+    }
+    for (size_t i = 0; i < len; i++) {
+        unsigned char const b = (unsigned char)text.data[i];
+        buf[i] = b < 0x20 || b == 0x7F || (ascii_only && b >= 0x80) ? '?' : (char)b;
+    }
+    return str_make(buf, len);
+}
+
+// Appends text in double quotes, with quotes and backslashes escaped, for log lines.
+static void append_quoted(Str_Builder *out, Str text) {
+    str_builder_append_char(out, '"');
+    for (size_t i = 0; i < text.len; i++) {
+        if (text.data[i] == '"' || text.data[i] == '\\') {
+            str_builder_append_char(out, '\\');
+        }
+        str_builder_append_char(out, text.data[i]);
+    }
+    str_builder_append_char(out, '"');
+}
+
+static void append_client(Str_Builder *out, Login_Client const *client) {
+    str_builder_append(out, client->ip);
+    str_builder_append(out, STR(" ("));
+    str_builder_append(out, client->country.len > 0 ? client->country : STR("country unknown"));
+    str_builder_append(out, STR(")"));
+}
+
+// Writes a finished log line to stderr, which Azure Container Apps keeps as the console log.
+static void log_line(Str_Builder *line) {
+    fprintf(stderr, "%.*s\n", STR_ARG(str_builder_str(line)));
+}
+
+static void log_login_refused(Login_Client const *client, Login_Decision const *d) {
+    char buf[512];
+    Str_Builder line;
+    str_builder_init(&line, buf, sizeof buf);
+    str_builder_append(&line, STR("login: refused attempt from "));
+    append_client(&line, client);
+    if (d->verdict == LOGIN_BUSY) {
+        str_builder_append(&line, STR(": too many logins from all addresses in the last minute"));
+    } else {
+        str_builder_append(&line, d->verdict == LOGIN_BANNED ? STR(": banned after ") : STR(": must wait after "));
+        str_builder_append_u64(&line, d->failures);
+        str_builder_append(&line, STR(" failures"));
+    }
+    str_builder_append(&line, STR(", "));
+    str_builder_append_u64(&line, (uint64_t)d->retry_after);
+    str_builder_append(&line, STR(" s more ("));
+    str_builder_append_u64(&line, d->refused);
+    str_builder_append(&line, STR(" refused since the last such line)"));
+    log_line(&line);
+}
+
+static void log_login_checked(Login_Client const *client, Str username, bool succeeded, Login_Decision const *after) {
+    char buf[512];
+    Str_Builder line;
+    str_builder_init(&line, buf, sizeof buf);
+    str_builder_append(&line, succeeded ? STR("login: success for ") : STR("login: FAILED for "));
+    append_quoted(&line, username);
+    str_builder_append(&line, STR(" from "));
+    append_client(&line, client);
+    if (!succeeded) {
+        str_builder_append(&line, STR("; "));
+        str_builder_append_u64(&line, after->failures);
+        str_builder_append(&line, after->failures == 1 ? STR(" recent failure") : STR(" recent failures"));
+        if (after->verdict == LOGIN_BANNED) {
+            str_builder_append(&line, STR(", now banned for "));
+            str_builder_append_u64(&line, (uint64_t)after->retry_after);
+            str_builder_append(&line, STR(" s"));
+        } else if (after->verdict == LOGIN_DELAYED) {
+            str_builder_append(&line, STR(", next attempt allowed in "));
+            str_builder_append_u64(&line, (uint64_t)after->retry_after);
+            str_builder_append(&line, STR(" s"));
+        }
+    }
+    log_line(&line);
+}
+
+static void respond_login_refused(Conn *c, Login_Decision const *d) {
+    char headers_buf[96];
+    Str_Builder headers;
+    str_builder_init(&headers, headers_buf, sizeof headers_buf);
+    str_builder_append(&headers, STR("Cache-Control: no-store\r\nRetry-After: "));
+    str_builder_append_u64(&headers, (uint64_t)d->retry_after);
+    str_builder_append(&headers, STR("\r\n"));
+
+    Str_Builder body;
+    body_begin(c, &body);
+    str_builder_append(&body, STR("{\"error\":\""));
+    str_builder_append(&body, d->verdict == LOGIN_BUSY ? STR("too many login attempts right now")
+                                                       : STR("too many failed logins from this address"));
+    str_builder_append(&body, STR("\",\"reason\":\""));
+    str_builder_append(&body, d->verdict == LOGIN_BUSY     ? STR("busy")
+                              : d->verdict == LOGIN_BANNED ? STR("banned")
+                                                           : STR("delayed"));
+    str_builder_append(&body, STR("\",\"retry_after\":"));
+    str_builder_append_u64(&body, (uint64_t)d->retry_after);
+    str_builder_append(&body, STR("}"));
+    respond_built(c, 429, JSON_TYPE, &body, false, str_builder_str(&headers));
+}
+
+/**
+ * POST /api/login. An address that failed too often recently, or a burst of
+ * attempts from everywhere, is refused at once (see login_guard.h). Every
+ * password that is checked is recorded in the database and logged.
+ */
 static void api_login(Worker *w, Conn *c, Request const *r) {
+    if (!LOGIN_ENABLED) {
+        respond_json_error(c, 503, STR("login is not configured"), NO_STORE);
+        return;
+    }
+    int64_t const now = unix_now();
+    Login_Client client;
+    describe_client(&r->client, &client);
+    Login_Decision const decision = login_guard_check(&LOGIN_GUARD, &r->client, now);
+    if (decision.verdict != LOGIN_ALLOWED) {
+        if (decision.log_refusal) {
+            log_login_refused(&client, &decision);
+        }
+        respond_login_refused(c, &decision);
+        return;
+    }
+
     char username_buf[128];
     char password_buf[128];
     Str_Builder username;
     Str_Builder password;
     str_builder_init(&username, username_buf, sizeof username_buf);
     str_builder_init(&password, password_buf, sizeof password_buf);
-
-    if (!LOGIN_ENABLED) {
-        respond_json_error(c, 503, STR("login is not configured"), NO_STORE);
-        return;
-    }
     Db_Status status = db_parse_login(&w->db, r->body, &username, &password);
     if (status != DB_OK) {
+        explicit_bzero(password_buf, sizeof password_buf);
         respond_db_error(c, status);
         return;
     }
@@ -691,13 +872,37 @@ static void api_login(Worker *w, Conn *c, Request const *r) {
     bool user_ok = str_eq_constant_time(str_builder_str(&username), ADMIN_USERNAME);
     bool password_ok = password_verify(str_builder_str(&password), &ADMIN_PASSWORD_HASH);
     explicit_bzero(password_buf, sizeof password_buf);
-    if (!(user_ok & password_ok)) {
-        respond_json_error(c, 401, STR("invalid username or password"),
-                           STR("Cache-Control: no-store\r\nWWW-Authenticate: Bearer\r\n"));
-        return;
+    bool const succeeded = user_ok & password_ok;
+
+    char name_buf[100];
+    char agent_buf[300];
+    Db_Login_Attempt const attempt = {
+        .ip = client.ip,
+        .country = client.country,
+        .username = clean_text(str_builder_str(&username), name_buf, sizeof name_buf, false),
+        .user_agent = clean_text(r->headers->user_agent, agent_buf, sizeof agent_buf, true),
+        .succeeded = succeeded,
+        .at = now,
+    };
+    if (db_record_login(&w->db, &attempt) != DB_OK) {
+        fprintf(stderr, "login: could not record the attempt from %.*s in the database\n", STR_ARG(client.ip));
     }
 
-    int64_t now = unix_now();
+    if (!succeeded) {
+        Login_Decision const after = login_guard_failed(&LOGIN_GUARD, &r->client, now);
+        log_login_checked(&client, attempt.username, false, &after);
+        Str_Builder body;
+        body_begin(c, &body);
+        str_builder_append(&body, STR("{\"error\":\"invalid username or password\",\"retry_after\":"));
+        str_builder_append_u64(&body, (uint64_t)after.retry_after);
+        str_builder_append(&body, STR("}"));
+        respond_built(c, 401, JSON_TYPE, &body, false,
+                      STR("Cache-Control: no-store\r\nWWW-Authenticate: Bearer\r\n"));
+        return;
+    }
+    login_guard_succeeded(&LOGIN_GUARD, &r->client);
+    log_login_checked(&client, attempt.username, true, &decision);
+
     int64_t expires_at = now + TOKEN_LIFETIME_SEC;
     Str_Builder body;
     body_begin(c, &body);
@@ -710,6 +915,83 @@ static void api_login(Worker *w, Conn *c, Request const *r) {
     str_builder_append_u64(&body, (uint64_t)expires_at);
     str_builder_append(&body, STR("}"));
     respond_built(c, 200, JSON_TYPE, &body, false, NO_STORE);
+}
+
+#define MAX_REPORTED_BLOCKS 500
+
+/**
+ * The login report: the addresses that must wait or are banned right now
+ * (from memory) and the recorded clients and attempts (from the database).
+ */
+static Db_Status build_login_report(Worker *w, int64_t now, Str_Builder *body) {
+    Login_Block blocks[MAX_REPORTED_BLOCKS];
+    size_t const count = login_guard_blocks(&LOGIN_GUARD, now, blocks, MAX_REPORTED_BLOCKS);
+    str_builder_append(body, STR("{\"now\":"));
+    str_builder_append_u64(body, (uint64_t)now);
+    str_builder_append(body, STR(",\"blocked\":["));
+    for (size_t i = 0; i < count; i++) {
+        Login_Client client;
+        describe_client(&blocks[i].ip, &client);
+        str_builder_append(body, i == 0 ? STR("{\"ip\":\"") : STR(",{\"ip\":\""));
+        str_builder_append(body, client.ip);
+        str_builder_append(body, STR("\",\"failures\":"));
+        str_builder_append_u64(body, blocks[i].failures);
+        str_builder_append(body, STR(",\"until\":"));
+        str_builder_append_u64(body, (uint64_t)blocks[i].until);
+        str_builder_append(body, blocks[i].banned ? STR(",\"banned\":true}") : STR(",\"banned\":false}"));
+    }
+    str_builder_append(body, STR("],\"report\":"));
+    Db_Status const status = db_login_report_json(&w->db, body);
+    if (status != DB_OK) {
+        return status;
+    }
+    str_builder_append(body, STR("}"));
+    return body->overflow ? DB_TOO_LARGE : DB_OK;
+}
+
+// GET /api/login-attempts (auth): the admin's "Kirjautumiset" view.
+static void api_login_report(Worker *w, Conn *c, Request const *r) {
+    if (!authenticate(r, NULL)) {
+        respond_unauthorized(c);
+        return;
+    }
+    int64_t const now = unix_now();
+    Str_Builder body;
+    body_begin(c, &body);
+    Db_Status status = build_login_report(w, now, &body);
+    if (status == DB_TOO_LARGE && big_acquire(w, c)) {
+        c->out = c->big;
+        c->out_cap = BIG_BUF_SIZE;
+        body_begin(c, &body);
+        status = build_login_report(w, now, &body);
+    }
+    if (status != DB_OK) {
+        respond_db_error(c, status);
+        return;
+    }
+    respond_built(c, 200, JSON_TYPE, &body, r->head_only, NO_STORE);
+}
+
+// DELETE /api/login-blocks/{client id} (auth): lifts an address's wait or ban.
+static void api_login_unblock(Worker *w, Conn *c, Request const *r, int64_t id) {
+    if (!authenticate(r, NULL)) {
+        respond_unauthorized(c);
+        return;
+    }
+    char ip_buf[IP_TEXT_SIZE + 1];
+    Str_Builder ip_text;
+    str_builder_init(&ip_text, ip_buf, sizeof ip_buf);
+    Db_Status const status = db_clear_login_client(&w->db, id, unix_now(), &ip_text);
+    if (status != DB_OK) {
+        respond_db_error(c, status);
+        return;
+    }
+    Ip_Address ip;
+    if (ip_parse(str_builder_str(&ip_text), &ip)) {
+        login_guard_clear(&LOGIN_GUARD, &ip);
+    }
+    fprintf(stderr, "login: an admin lifted the block of %.*s\n", STR_ARG(str_builder_str(&ip_text)));
+    respond_id(c, 200, id);
 }
 
 static void api_session(Conn *c, Request const *r) {
@@ -759,15 +1041,6 @@ static Resource const RESOURCES[] = {
         .remove = db_delete_category,
     },
 };
-
-static void respond_id(Conn *c, int status, int64_t id) {
-    Str_Builder body;
-    body_begin(c, &body);
-    str_builder_append(&body, STR("{\"id\":"));
-    str_builder_append_u64(&body, (uint64_t)id);
-    str_builder_append(&body, STR("}"));
-    respond_built(c, status, JSON_TYPE, &body, false, NO_STORE);
-}
 
 static void api_list(Worker *w, Conn *c, Request const *r, Resource const *res) {
     Str_Builder body;
@@ -1116,6 +1389,14 @@ static void api_get_recipe_by_slug(Worker *w, Conn *c, Request const *r, Str slu
  *   GET    /api/images            (auth) -> [{id, url, original_name, size, created_at, used, recipes}, ...]
  *   POST   /api/images            (auth) raw JPEG/PNG/GIF/WebP body, X-File-Name -> 201 {id, url}
  *   DELETE /api/images/{id}       (auth) -> {id}, or 409 while a recipe shows it
+ *
+ *   GET    /api/login-attempts    (auth) -> {now, blocked: [{ip, failures, until, banned}, ...],
+ *                                 report: {clients: [...], attempts: [...]}}
+ *   DELETE /api/login-blocks/{client id} (auth) -> {id}: lifts the address's wait or ban
+ *
+ * A login refused by the brute-force protection gets 429 with Retry-After and
+ * {error, reason: "delayed" | "banned" | "busy", retry_after}; a wrong password
+ * gets 401 with {error, retry_after}, the wait before the next attempt.
  */
 static void handle_api(Worker *w, Conn *c, Request const *r) {
     if (str_eq(r->path, STR("/api/login"))) {
@@ -1131,6 +1412,26 @@ static void handle_api(Worker *w, Conn *c, Request const *r) {
             api_session(c, r);
         } else {
             respond_method_not_allowed(c, STR("Cache-Control: no-store\r\nAllow: GET, HEAD\r\n"));
+        }
+        return;
+    }
+    if (str_eq(r->path, STR("/api/login-attempts"))) {
+        if (str_eq(r->method, STR("GET")) || r->head_only) {
+            api_login_report(w, c, r);
+        } else {
+            respond_method_not_allowed(c, STR("Cache-Control: no-store\r\nAllow: GET, HEAD\r\n"));
+        }
+        return;
+    }
+    Str login_blocks = STR("/api/login-blocks/");
+    if (str_starts_with(r->path, login_blocks)) {
+        uint64_t id;
+        if (!str_to_u64(str_slice(r->path, login_blocks.len, r->path.len), &id) || id == 0 || id > INT64_MAX) {
+            respond_db_error(c, DB_NOT_FOUND);
+        } else if (str_eq(r->method, STR("DELETE"))) {
+            api_login_unblock(w, c, r, (int64_t)id);
+        } else {
+            respond_method_not_allowed(c, STR("Cache-Control: no-store\r\nAllow: DELETE\r\n"));
         }
         return;
     }
@@ -1201,6 +1502,8 @@ static int build_response(Worker *w, Conn *c) {
         .content_length = 0,
         .authorization = STR(""),
         .file_name = STR(""),
+        .forwarded_for = STR(""),
+        .user_agent = STR(""),
     };
     scan_headers(headers, &h);
     if (h.bad_content_length) {
@@ -1248,7 +1551,12 @@ static int build_response(Worker *w, Conn *c) {
         .body = str_slice(buffered, head_len, request_len),
         .head_only = str_eq(method, STR("HEAD")),
         .headers = &h,
+        .client = c->peer,
     };
+    Ip_Address forwarded;
+    if (TRUST_PROXY && ip_from_forwarded_for(h.forwarded_for, &forwarded)) {
+        r.client = forwarded;
+    }
 
     // Strip query string / fragment.
     size_t query = str_find_any(r.path, STR("?#"));
@@ -1461,7 +1769,9 @@ static void conn_on_readable(Worker *w, Conn *c, int64_t now) {
 
 static void accept_all(Worker *w, int64_t now) {
     for (int i = 0; i < ACCEPT_BURST; i++) {
-        int fd = accept4(w->listen_fd, NULL, NULL, SOCK_NONBLOCK | SOCK_CLOEXEC);
+        struct sockaddr_in peer;
+        socklen_t peer_len = sizeof peer;
+        int fd = accept4(w->listen_fd, (struct sockaddr *)&peer, &peer_len, SOCK_NONBLOCK | SOCK_CLOEXEC);
         if (fd < 0) {
             return;  // EAGAIN or transient error.
         }
@@ -1488,6 +1798,7 @@ static void accept_all(Worker *w, int64_t now) {
         c->big = NULL;
         c->file_pos = c->file_end = 0;
         c->last_active = now;
+        c->peer = ip_from_v4((uint8_t const *)&peer.sin_addr.s_addr);
         c->events = EPOLLIN;
 
         struct epoll_event ev = {
@@ -1569,6 +1880,15 @@ static int make_listener(uint16_t port) {
     return fd;
 }
 
+// Called for each address with recent failures in the database at startup.
+static void restore_login_failures(void *context, Str ip_text, uint32_t failures, int64_t last_failure) {
+    Ip_Address ip;
+    if (ip_parse(ip_text, &ip)) {
+        login_guard_restore(&LOGIN_GUARD, &ip, failures, last_failure);
+        (*(size_t *)context)++;
+    }
+}
+
 static void on_signal(int sig) {
     (void)sig;
     STOP_REQUESTED = 1;
@@ -1577,10 +1897,15 @@ static void on_signal(int sig) {
 static void usage(Str argv0) {
     fprintf(stderr,
             "usage: %.*s [-p port] [-t threads] [-r docroot] [-d database] [-m migrations]\n"
-            "       [-u uploads] [-s local|share]\n"
+            "       [-u uploads] [-s local|share] [-g countries]\n"
             "  -m  directory of <number>__<name>.sql migrations (default: migrations)\n"
             "  -u  directory uploaded images are stored in, created if missing (default: uploads)\n"
-            "  -s  where the database lives; use share for a network share such as Azure Files\n",
+            "  -s  where the database lives; use share for a network share such as Azure Files\n"
+            "  -g  country file made by kasin-geoip, for the countries of login attempts\n"
+            "environment:\n"
+            "  KASIN_ADMIN_PASSWORD_HASH  the admin password hash made by kasin-passwd\n"
+            "  KASIN_JWT_SECRET           signs sessions; random per start when unset\n"
+            "  KASIN_TRUST_PROXY=1        take the client address from X-Forwarded-For\n",
             STR_ARG(argv0));
 }
 
@@ -1595,10 +1920,11 @@ int main(int argc, char **argv) {
     Str db_path = STR("kotoa.db");
     Str migrations_dir = STR("migrations");
     Str uploads_dir = STR("uploads");
+    Str geoip_path = STR("");
     Db_Storage db_storage = DB_STORAGE_LOCAL;
     int opt;
     // CHECK What does getopt do?
-    while ((opt = getopt(argc, argv, "p:t:r:d:m:u:s:h")) != -1) {
+    while ((opt = getopt(argc, argv, "p:t:r:d:m:u:s:g:h")) != -1) {
         uint64_t value;
         switch (opt) {
         case 'p':
@@ -1626,6 +1952,9 @@ int main(int argc, char **argv) {
             break;
         case 'u':
             uploads_dir = str_from_cstr(optarg);
+            break;
+        case 'g':
+            geoip_path = str_from_cstr(optarg);
             break;
         case 's':
             if (str_eq(str_from_cstr(optarg), STR("local"))) {
@@ -1723,6 +2052,15 @@ int main(int argc, char **argv) {
         return EX_CONFIG;
     }
 
+    TRUST_PROXY = str_eq(str_from_cstr(getenv("KASIN_TRUST_PROXY")), STR("1"));
+    login_guard_init(&LOGIN_GUARD, unix_now());
+    char geoip_z[MAX_PATH_LEN];  // open() needs a NUL-terminated path.
+    if (geoip_path.len == 0) {
+        fprintf(stderr, "warning: no country file (-g); login attempts are recorded without countries\n");
+    } else if (!str_to_cstr(geoip_path, geoip_z, sizeof geoip_z) || !geoip_open(&GEOIP, geoip_z)) {
+        fprintf(stderr, "warning: login attempts are recorded without countries\n");
+    }
+
     // SQLite gets a fixed heap out of the same reservation.
     void *db_heap = arena_alloc(&arena, DB_HEAP_SIZE, CACHE_LINE);
     if (!db_heap) {
@@ -1793,6 +2131,15 @@ int main(int argc, char **argv) {
         workers[i] = w;
     }
 
+    // Waits and bans from before a restart still apply.
+    size_t restored = 0;
+    if (db_recent_login_failures(&workers[0]->db, unix_now() - LOGIN_WINDOW_SEC, restore_login_failures,
+                                 &restored) != DB_OK) {
+        fprintf(stderr, "warning: could not read recent failed logins from the database\n");
+    } else if (restored > 0) {
+        fprintf(stderr, "login: restored recent failures of %zu address%s\n", restored, restored == 1 ? "" : "es");
+    }
+
     // No SA_RESTART so signals wake epoll_wait.
     struct sigaction sa = {
         .sa_handler = on_signal,
@@ -1804,11 +2151,12 @@ int main(int argc, char **argv) {
 
     printf("kasin-httpd: port %d, %ld workers, %d conns/worker, req %d B, resp %d B, "
            "reserved %.1f MiB (SQLite heap %d MiB, %d x %d KiB large buffers per worker), "
-           "docroot %.*s, database %.*s, uploads %.*s\n",
+           "docroot %.*s, database %.*s, uploads %.*s, client address from %s\n",
            port, nworkers, MAX_CONNS_PER_WORKER, REQ_BUF_SIZE, RESP_BUF_SIZE,
            (double)total / (1024.0 * 1024.0), DB_HEAP_SIZE / (1024 * 1024),
            BIG_BUFS_PER_WORKER, BIG_BUF_SIZE / 1024,
-           STR_ARG(root.len > 0 ? root : STR("(none)")), STR_ARG(db_path), STR_ARG(uploads_dir));
+           STR_ARG(root.len > 0 ? root : STR("(none)")), STR_ARG(db_path), STR_ARG(uploads_dir),
+           TRUST_PROXY ? "X-Forwarded-For" : "the connection");
     fflush(stdout);
 
     long const worker_count = nworkers;

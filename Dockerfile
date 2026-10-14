@@ -3,7 +3,7 @@
 #   docker build -t kotoa-kasin .
 
 FROM alpine:3.20 AS build
-RUN apk add --no-cache build-base cmake sqlite-dev
+RUN apk add --no-cache build-base cmake sqlite-dev curl
 WORKDIR /src
 COPY CMakeLists.txt ./
 COPY src ./src
@@ -16,6 +16,14 @@ COPY js ./js
 COPY css ./css
 RUN build/kasin-jsbundle -o bundles/js js/bundles.txt \
  && build/kasin-cssbundle -o bundles/css css/bundles.txt
+# Countries of login attempts, from DB-IP's monthly data; each deployment gets
+# the latest. Kept outside the served directory. If the download fails, the
+# image is built anyway and attempts are recorded without countries.
+COPY scripts ./scripts
+RUN mkdir geoip \
+ && { { sh scripts/fetch-geoip geoip.csv && build/kasin-geoip geoip.csv geoip/geoip.bin; } \
+      || echo "warning: no country data for login attempts"; } \
+ && rm -f geoip.csv
 
 FROM alpine:3.20
 RUN apk add --no-cache sqlite-libs \
@@ -23,9 +31,10 @@ RUN apk add --no-cache sqlite-libs \
 COPY --from=build /src/build/kasin-httpd /usr/local/bin/kasin-httpd
 COPY public /srv/public
 COPY --from=build /src/bundles/ /srv/public/
+COPY --from=build /src/geoip/ /srv/geoip/
 COPY migrations /srv/migrations
 EXPOSE 8080
 # Two workers fit the smallest Container Apps size (0.25 vCPU, 0.5 GiB) with room
 # to spare. /data is an Azure Files share; SQLite cannot take POSIX file locks there, so
 # it locks with a ".lock" directory and keeps a rollback journal (-s share).
-CMD ["kasin-httpd", "-p", "8080", "-t", "2", "-r", "/srv/public", "-d", "/data/kotoa.db", "-m", "/srv/migrations", "-u", "/data/uploads", "-s", "share"]
+CMD ["kasin-httpd", "-p", "8080", "-t", "2", "-r", "/srv/public", "-d", "/data/kotoa.db", "-m", "/srv/migrations", "-u", "/data/uploads", "-s", "share", "-g", "/srv/geoip/geoip.bin"]

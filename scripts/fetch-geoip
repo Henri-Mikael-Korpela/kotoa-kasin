@@ -1,0 +1,47 @@
+#!/bin/sh
+#
+# Downloads DB-IP's free "IP to Country Lite" database (CC BY 4.0) as CSV.
+#
+# Usage: fetch-geoip <out.csv>
+#
+# A new edition is published every month; when this month's is not out yet,
+# last month's is used. kasin-geoip turns the CSV into the server's country
+# file. The data is attributed in the admin view: "IP Geolocation by DB-IP".
+
+set -eu
+
+if [ $# -ne 1 ]; then
+    echo "usage: fetch-geoip <out.csv>" >&2
+    exit 64
+fi
+out=$1
+
+year=$(date -u +%Y)
+month=$(date -u +%m)
+month=${month#0}
+previous_month=$((month - 1))
+previous_year=$year
+if [ "$previous_month" -eq 0 ]; then
+    previous_month=12
+    previous_year=$((year - 1))
+fi
+
+download() {
+    url="https://download.db-ip.com/free/dbip-country-lite-$1.csv.gz"
+    if command -v curl > /dev/null 2>&1; then
+        curl --fail --silent --show-error --location --max-time 120 "$url"
+    else
+        wget -q -O - "$url"
+    fi
+}
+
+for edition in "$(printf '%s-%02d' "$year" "$month")" "$(printf '%s-%02d' "$previous_year" "$previous_month")"; do
+    if download "$edition" | gunzip > "$out.part" 2> /dev/null && [ -s "$out.part" ]; then
+        mv "$out.part" "$out"
+        echo "fetch-geoip: DB-IP country edition $edition saved to $out"
+        exit 0
+    fi
+done
+rm -f "$out.part"
+echo "fetch-geoip: could not download the DB-IP country database" >&2
+exit 1

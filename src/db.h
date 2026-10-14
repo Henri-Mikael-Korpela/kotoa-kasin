@@ -62,7 +62,26 @@ typedef struct {
     sqlite3_stmt *insert_image;
     sqlite3_stmt *delete_image;
     sqlite3_stmt *parse_login;
+    sqlite3_stmt *upsert_login_client;
+    sqlite3_stmt *insert_login_attempt;
+    sqlite3_stmt *prune_login_attempts;
+    sqlite3_stmt *prune_login_clients;
+    sqlite3_stmt *login_report;
+    sqlite3_stmt *recent_login_failures;
+    sqlite3_stmt *clear_login_client;
 } Db;
+
+/**
+ * A login attempt to record: one password check.
+ */
+typedef struct {
+    Str     ip;          /**< The client's address in text form. */
+    Str     country;     /**< Two capital letters, or empty when unknown. */
+    Str     username;    /**< The user name tried, at most 100 bytes. */
+    Str     user_agent;  /**< The browser's User-Agent header, at most 300 bytes. */
+    bool    succeeded;
+    int64_t at;          /**< Unix seconds. */
+} Db_Login_Attempt;
 
 /**
  * Hands SQLite its heap and initializes the library. Call once, before any
@@ -215,5 +234,36 @@ Db_Status db_forget_image(Db *db, int64_t id);
  * @param password Receives the password.
  */
 Db_Status db_parse_login(Db *db, Str json, Str_Builder *username, Str_Builder *password);
+
+/**
+ * Records a login attempt under its client (made on its first attempt), and
+ * removes clients and attempts older than 90 days. One transaction.
+ */
+Db_Status db_record_login(Db *db, Db_Login_Attempt const *attempt);
+
+/**
+ * Writes the admin's view of the logins: {"clients": [...], "attempts": [...]}
+ * with the 500 clients seen last and the 300 latest attempts.
+ *
+ *   clients:  {id, ip, country, first_seen, last_seen, failures, successes, last_failure}
+ *   attempts: {id, client_id, at, ip, country, username, user_agent, succeeded}
+ */
+Db_Status db_login_report_json(Db *db, Str_Builder *out);
+
+/**
+ * Calls each() for every address with failed logins since a time that still
+ * count towards a wait or ban: those after its last successful login and
+ * after an admin last lifted its block. Used to restore the limits at startup.
+ */
+Db_Status db_recent_login_failures(Db *db, int64_t since,
+                                   void (*each)(void *context, Str ip, uint32_t failures, int64_t last_failure),
+                                   void *context);
+
+/**
+ * Lifts a client's block: its failures so far no longer count.
+ *
+ * @param ip Receives the client's address.
+ */
+Db_Status db_clear_login_client(Db *db, int64_t id, int64_t now, Str_Builder *ip);
 
 #endif  // __KASIN_DB_H__

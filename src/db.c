@@ -220,6 +220,30 @@ bool db_prepare_file(Str path, Db_Storage storage, Str migrations_dir) {
     "json_object('id', c.id, 'name', c.name, 'recipe_count',"            \
     " (SELECT count(*) FROM recipes WHERE category_id = c.id))"
 
+/*
+ * The admin's view of the logins, newest first: the 500 clients seen last and
+ * the 300 latest attempts.
+ */
+#define LOGIN_REPORT_SQL                                                                  \
+    "SELECT json_object("                                                                 \
+    " 'clients', (SELECT json_group_array(json(client)) FROM ("                          \
+    "  SELECT json_object('id', c.id, 'ip', c.ip, 'country', c.country,"                 \
+    "   'first_seen', c.first_seen, 'last_seen', c.last_seen,"                           \
+    "   'failures', (SELECT count(*) FROM login_attempts a"                              \
+    "    WHERE a.client_id = c.id AND a.succeeded = 0),"                                 \
+    "   'successes', (SELECT count(*) FROM login_attempts a"                             \
+    "    WHERE a.client_id = c.id AND a.succeeded = 1),"                                 \
+    "   'last_failure', (SELECT max(a.at) FROM login_attempts a"                         \
+    "    WHERE a.client_id = c.id AND a.succeeded = 0)) AS client"                       \
+    "  FROM login_clients c ORDER BY c.last_seen DESC, c.id DESC LIMIT 500)),"           \
+    " 'attempts', (SELECT json_group_array(json(attempt)) FROM ("                        \
+    "  SELECT json_object('id', a.id, 'client_id', a.client_id, 'at', a.at,"             \
+    "   'ip', c.ip, 'country', c.country, 'username', a.username,"                       \
+    "   'user_agent', a.user_agent, 'succeeded', json(iif(a.succeeded, 'true', 'false')))" \
+    "   AS attempt"                                                                       \
+    "  FROM login_attempts a JOIN login_clients c ON c.id = a.client_id"                 \
+    "  ORDER BY a.at DESC, a.id DESC LIMIT 300)))"
+
 static bool prepare(Db *db, sqlite3_stmt **stmt, Str sql) {
     return sql_prepare(db->conn, stmt, sql, true);
 }
@@ -245,6 +269,13 @@ bool db_open(Db *db, Str path, Db_Storage storage) {
         .insert_image = NULL,
         .delete_image = NULL,
         .parse_login = NULL,
+        .upsert_login_client = NULL,
+        .insert_login_attempt = NULL,
+        .prune_login_attempts = NULL,
+        .prune_login_clients = NULL,
+        .login_report = NULL,
+        .recent_login_failures = NULL,
+        .clear_login_client = NULL,
     };
     if (!open_connection(&db->conn, path, storage) || !sql_exec(db->conn, STR("PRAGMA foreign_keys = ON;"), STR("enabling foreign keys"))) {
         db_close(db);
@@ -308,7 +339,29 @@ bool db_open(Db *db, Str path, Db_Storage storage) {
                 " RETURNING id")) &&
         prepare(db, &db->delete_image, STR("DELETE FROM images WHERE id = ?1")) &&
         prepare(db, &db->parse_login,
-                STR("SELECT json_extract(?1, '$.username'), json_extract(?1, '$.password')"));
+                STR("SELECT json_extract(?1, '$.username'), json_extract(?1, '$.password')")) &&
+        prepare(db, &db->upsert_login_client,
+                STR("INSERT INTO login_clients (ip, country, first_seen, last_seen)"
+                " VALUES (?1, nullif(?2, ''), ?3, ?3)"
+                " ON CONFLICT (ip) DO UPDATE SET last_seen = excluded.last_seen,"
+                " country = coalesce(excluded.country, login_clients.country)"
+                " RETURNING id")) &&
+        prepare(db, &db->insert_login_attempt,
+                STR("INSERT INTO login_attempts (client_id, at, username, user_agent, succeeded)"
+                " VALUES (?1, ?2, ?3, ?4, ?5)")) &&
+        prepare(db, &db->prune_login_attempts, STR("DELETE FROM login_attempts WHERE at < ?1")) &&
+        prepare(db, &db->prune_login_clients, STR("DELETE FROM login_clients WHERE last_seen < ?1")) &&
+        prepare(db, &db->login_report, STR(LOGIN_REPORT_SQL)) &&
+        prepare(db, &db->recent_login_failures,
+                STR("SELECT c.ip, count(*), max(a.at)"
+                " FROM login_attempts a JOIN login_clients c ON c.id = a.client_id"
+                " WHERE a.succeeded = 0 AND a.at >= ?1 AND a.at > c.cleared_at"
+                // By id, not time: a failure in the same second as a success may come after it.
+                " AND a.id > coalesce((SELECT max(s.id) FROM login_attempts s"
+                " WHERE s.client_id = c.id AND s.succeeded = 1), 0)"
+                " GROUP BY c.id")) &&
+        prepare(db, &db->clear_login_client,
+                STR("UPDATE login_clients SET cleared_at = ?2 WHERE id = ?1 RETURNING ip"));
     if (!ok) {
         db_close(db);
     }
@@ -334,6 +387,13 @@ void db_close(Db *db) {
     sqlite3_finalize(db->insert_image);
     sqlite3_finalize(db->delete_image);
     sqlite3_finalize(db->parse_login);
+    sqlite3_finalize(db->upsert_login_client);
+    sqlite3_finalize(db->insert_login_attempt);
+    sqlite3_finalize(db->prune_login_attempts);
+    sqlite3_finalize(db->prune_login_clients);
+    sqlite3_finalize(db->login_report);
+    sqlite3_finalize(db->recent_login_failures);
+    sqlite3_finalize(db->clear_login_client);
     sqlite3_close(db->conn);
     db->conn = NULL;
 }
@@ -603,5 +663,105 @@ Db_Status db_parse_login(Db *db, Str json, Str_Builder *username, Str_Builder *p
         status = DB_OK;
     }
     finish(db->parse_login);
+    return status;
+}
+
+#define LOGIN_RETENTION_SEC (90 * 24 * 60 * 60)
+
+// Runs a statement that returns no rows, with its parameters already bound.
+static int run(sqlite3_stmt *stmt) {
+    int const rc = sqlite3_step(stmt);
+    finish(stmt);
+    return rc;
+}
+
+static Db_Status record_login_steps(Db *db, Db_Login_Attempt const *attempt) {
+    sqlite3_stmt *client = db->upsert_login_client;
+    if (!sql_bind_str(client, 1, attempt->ip) || !sql_bind_str(client, 2, attempt->country) ||
+        sqlite3_bind_int64(client, 3, attempt->at) != SQLITE_OK) {
+        finish(client);
+        return DB_ERROR;
+    }
+    int rc = sqlite3_step(client);
+    int64_t client_id = 0;
+    if (rc == SQLITE_ROW) {
+        client_id = sqlite3_column_int64(client, 0);
+        rc = sqlite3_step(client);  // Runs the statement to completion.
+    }
+    finish(client);
+    if (rc != SQLITE_DONE) {
+        return status_from(rc);
+    }
+
+    sqlite3_stmt *insert = db->insert_login_attempt;
+    if (sqlite3_bind_int64(insert, 1, client_id) != SQLITE_OK ||
+        sqlite3_bind_int64(insert, 2, attempt->at) != SQLITE_OK ||
+        !sql_bind_str(insert, 3, attempt->username) || !sql_bind_str(insert, 4, attempt->user_agent) ||
+        sqlite3_bind_int(insert, 5, attempt->succeeded ? 1 : 0) != SQLITE_OK) {
+        finish(insert);
+        return DB_ERROR;
+    }
+    rc = run(insert);
+    if (rc != SQLITE_DONE) {
+        return status_from(rc);
+    }
+
+    int64_t const cutoff = attempt->at - LOGIN_RETENTION_SEC;
+    sqlite3_bind_int64(db->prune_login_attempts, 1, cutoff);
+    rc = run(db->prune_login_attempts);
+    if (rc == SQLITE_DONE) {
+        sqlite3_bind_int64(db->prune_login_clients, 1, cutoff);
+        rc = run(db->prune_login_clients);
+    }
+    return rc == SQLITE_DONE ? DB_OK : status_from(rc);
+}
+
+Db_Status db_record_login(Db *db, Db_Login_Attempt const *attempt) {
+    if (!sql_exec(db->conn, STR("BEGIN IMMEDIATE;"), STR("starting to record a login"))) {
+        return DB_BUSY;
+    }
+    Db_Status const status = record_login_steps(db, attempt);
+    if (status == DB_OK && sql_exec(db->conn, STR("COMMIT;"), STR("recording a login"))) {
+        return DB_OK;
+    }
+    sql_exec(db->conn, STR("ROLLBACK;"), STR("undoing a login record"));
+    return status == DB_OK ? DB_ERROR : status;
+}
+
+Db_Status db_login_report_json(Db *db, Str_Builder *out) {
+    return append_text_result(db->login_report, out);
+}
+
+Db_Status db_recent_login_failures(Db *db, int64_t since,
+                                   void (*each)(void *context, Str ip, uint32_t failures, int64_t last_failure),
+                                   void *context) {
+    sqlite3_stmt *stmt = db->recent_login_failures;
+    sqlite3_bind_int64(stmt, 1, since);
+    int rc;
+    while ((rc = sqlite3_step(stmt)) == SQLITE_ROW) {
+        int64_t const failures = sqlite3_column_int64(stmt, 1);
+        each(context, sql_column_str(stmt, 0), failures > UINT32_MAX ? UINT32_MAX : (uint32_t)failures,
+             sqlite3_column_int64(stmt, 2));
+    }
+    finish(stmt);
+    return rc == SQLITE_DONE ? DB_OK : status_from(rc);
+}
+
+Db_Status db_clear_login_client(Db *db, int64_t id, int64_t now, Str_Builder *ip) {
+    sqlite3_stmt *stmt = db->clear_login_client;
+    sqlite3_bind_int64(stmt, 1, id);
+    sqlite3_bind_int64(stmt, 2, now);
+    int rc = sqlite3_step(stmt);
+    Db_Status status;
+    if (rc == SQLITE_ROW) {
+        str_builder_append(ip, sql_column_str(stmt, 0));
+        rc = sqlite3_step(stmt);  // Runs the statement to completion.
+        status = rc == SQLITE_DONE ? DB_OK : status_from(rc);
+    } else if (rc == SQLITE_DONE) {
+        status = DB_NOT_FOUND;
+    } else {
+        status = status_from(rc);
+    }
+    finish(stmt);
     return status;
 }

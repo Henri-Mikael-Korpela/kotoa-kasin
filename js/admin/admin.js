@@ -36,9 +36,19 @@ function goToLogin() {
     window.location.replace(LOGIN_PAGE);
 }
 
-// What api() throws: the HTTP status (0 when the server was not reached) and a message.
-function apiError(status, message) {
-    return { status, message };
+/*
+ * What api() throws: the HTTP status (0 when the server was not reached) and a
+ * message. For a refused or failed login also the wait before the next attempt,
+ * in seconds, and why ("delayed", "banned" or "busy").
+ */
+function apiError(status, message, data) {
+    const details = data || {};
+    return {
+        status,
+        message,
+        retryAfter: Number(details.retry_after) || 0,
+        reason: typeof details.reason === 'string' ? details.reason : '',
+    };
 }
 
 /*
@@ -64,7 +74,7 @@ async function apiFetch(path, options) {
         throw apiError(401, 'Istunto on vanhentunut.');
     }
     if (!response.ok) {
-        throw apiError(response.status, data.error || 'HTTP ' + response.status);
+        throw apiError(response.status, data.error || 'HTTP ' + response.status, data);
     }
     return data;
 }
@@ -163,10 +173,56 @@ function recipeCountText(count) {
 
 // Login page.
 
+// "45 sekunnin" or "15 minuutin", for "... kuluttua".
+function waitText(seconds) {
+    if (seconds < 60) {
+        return seconds + ' sekunnin';
+    }
+    const minutes = Math.ceil(seconds / 60);
+    return minutes + ' minuutin';
+}
+
+// What to say when the server refused a login or asked to wait after a wrong password.
+function loginErrorText(error, seconds) {
+    if (error.status === 401) {
+        return seconds > 0
+            ? 'Väärä käyttäjätunnus tai salasana. Voit yrittää uudelleen ' + waitText(seconds) + ' kuluttua.'
+            : 'Väärä käyttäjätunnus tai salasana.';
+    }
+    if (error.status === 429 && error.reason === 'banned') {
+        return 'Liian monta epäonnistunutta yritystä. Kirjautuminen tästä osoitteesta on estetty. ' +
+            'Yritä uudelleen ' + waitText(seconds) + ' kuluttua.';
+    }
+    if (error.status === 429 && error.reason === 'busy') {
+        return 'Kirjautumisyrityksiä on juuri nyt liikaa. Yritä uudelleen ' + waitText(seconds) + ' kuluttua.';
+    }
+    if (error.status === 429) {
+        return 'Liian monta epäonnistunutta yritystä. Yritä uudelleen ' + waitText(seconds) + ' kuluttua.';
+    }
+    return messageFor(error, 'Kirjautuminen epäonnistui. Yritä uudelleen.');
+}
+
 function initLoginPage() {
     const form = document.getElementById('loginForm');
     const errorEl = document.getElementById('loginError');
     const button = form.querySelector('button[type="submit"]');
+    let countdown = null;
+
+    // Keeps the button disabled while the server asks to wait, counting down in the message.
+    function showWait(error) {
+        window.clearInterval(countdown);
+        const until = Date.now() + error.retryAfter * 1000;
+        function tick() {
+            const seconds = Math.max(0, Math.ceil((until - Date.now()) / 1000));
+            errorEl.textContent = loginErrorText(error, seconds);
+            button.disabled = seconds > 0;
+            if (seconds === 0) {
+                window.clearInterval(countdown);
+            }
+        }
+        tick();
+        countdown = window.setInterval(tick, 1000);
+    }
 
     // Already logged in: skip the form.
     async function skipIfLoggedIn() {
@@ -196,9 +252,11 @@ function initLoginPage() {
             });
         } catch (error) {
             button.disabled = false;
-            errorEl.textContent = error.status === 401
-                ? 'Väärä käyttäjätunnus tai salasana.'
-                : messageFor(error, 'Kirjautuminen epäonnistui. Yritä uudelleen.');
+            if (error.retryAfter > 0) {
+                showWait(error);
+            } else {
+                errorEl.textContent = loginErrorText(error, 0);
+            }
             form.password.select();
             return;
         }
@@ -795,6 +853,254 @@ function initEditPage() {
     });
 }
 
+// Login attempts page (Kirjautumiset).
+
+const DAY_SEC = 24 * 60 * 60;
+const REFRESH_MS = 30 * 1000;
+const COUNTRY_NAMES = window.Intl && Intl.DisplayNames ? new Intl.DisplayNames(['fi'], { type: 'region' }) : null;
+
+// The flag of a country as an emoji: its two letters as regional indicator symbols.
+function flagEmoji(code) {
+    const base = 0x1F1E6 - 'A'.charCodeAt(0);
+    return String.fromCodePoint(base + code.charCodeAt(0), base + code.charCodeAt(1));
+}
+
+function countryName(code) {
+    try {
+        return COUNTRY_NAMES ? COUNTRY_NAMES.of(code) : code;
+    } catch (e) {
+        return code;
+    }
+}
+
+// A country cell's contents: flag and Finnish name, or "Tuntematon" (private networks and unknown ranges).
+function countryElement(code) {
+    const cell = document.createElement('span');
+    cell.className = 'logins-country';
+    if (typeof code !== 'string' || !/^[A-Z]{2}$/.test(code)) {
+        cell.textContent = 'Tuntematon';
+        cell.classList.add('is-unknown');
+        return cell;
+    }
+    const flag = document.createElement('span');
+    flag.className = 'logins-flag';
+    flag.setAttribute('aria-hidden', 'true');
+    flag.textContent = flagEmoji(code);
+    cell.append(flag, countryName(code));
+    cell.title = code;
+    return cell;
+}
+
+function formatTime(seconds) {
+    return new Date(seconds * 1000).toLocaleString('fi-FI', {
+        day: 'numeric',
+        month: 'numeric',
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+    });
+}
+
+// "3 min 12 s" or "45 s".
+function formatRemaining(seconds) {
+    const left = Math.max(0, seconds);
+    const minutes = Math.floor(left / 60);
+    return minutes > 0 ? minutes + ' min ' + (left % 60) + ' s' : left + ' s';
+}
+
+function cell(content) {
+    const td = document.createElement('td');
+    if (content instanceof Node) {
+        td.appendChild(content);
+    } else {
+        td.textContent = content;
+    }
+    return td;
+}
+
+function row(cells) {
+    const tr = document.createElement('tr');
+    tr.append(...cells);
+    return tr;
+}
+
+// Shows a table with its rows, or its "nothing here" note when there are none.
+function fillTable(table, body, empty, rows) {
+    body.replaceChildren(...rows);
+    table.hidden = rows.length === 0;
+    empty.hidden = rows.length > 0;
+}
+
+// The numbers above the tables, from the latest attempts and current blocks.
+function loginSummary(data) {
+    const since = data.now - DAY_SEC;
+    let failed = 0;
+    const addresses = new Set();
+    for (const attempt of data.report.attempts) {
+        if (!attempt.succeeded && attempt.at >= since) {
+            failed++;
+            addresses.add(attempt.ip);
+        }
+    }
+    return { failed, addresses: addresses.size, blocked: data.blocked.length };
+}
+
+function initLoginsPage() {
+    const status = document.getElementById('loginsStatus');
+    const errorEl = document.getElementById('loginsError');
+    const content = document.getElementById('loginsContent');
+    const showSucceeded = document.getElementById('showSucceeded');
+    const refreshButton = document.getElementById('loginsRefresh');
+    const elements = {
+        failedDay: document.getElementById('loginsFailedDay'),
+        addressesDay: document.getElementById('loginsAddressesDay'),
+        blockedNow: document.getElementById('loginsBlockedNow'),
+        blockedTable: document.getElementById('blockedTable'),
+        blockedRows: document.getElementById('blockedRows'),
+        blockedEmpty: document.getElementById('blockedEmpty'),
+        attemptsTitle: document.getElementById('attemptsTitle'),
+        attemptsTable: document.getElementById('attemptsTable'),
+        attemptsRows: document.getElementById('attemptsRows'),
+        attemptsEmpty: document.getElementById('attemptsEmpty'),
+        clientsTable: document.getElementById('clientsTable'),
+        clientsRows: document.getElementById('clientsRows'),
+        clientsEmpty: document.getElementById('clientsEmpty'),
+    };
+    let latest = null;
+    setupLogout();
+
+    async function unblock(client, button) {
+        if (!window.confirm('Poistetaanko osoitteen ' + client.ip + ' esto?')) {
+            return;
+        }
+        errorEl.textContent = '';
+        button.disabled = true;
+        try {
+            await api('DELETE', '/api/login-blocks/' + encodeURIComponent(client.id));
+        } catch (error) {
+            button.disabled = false;
+            if (error.status !== 401) {
+                errorEl.textContent = messageFor(error, 'Eston poistaminen epäonnistui.');
+            }
+            return;
+        }
+        await load();
+    }
+
+    function blockedRow(block, clientsByIp) {
+        const client = clientsByIp.get(block.ip);
+        const until = document.createElement('span');
+        until.textContent = formatTime(block.until) + ' (' + formatRemaining(block.until - latest.now) + ')';
+        const actions = document.createElement('span');
+        if (client) {
+            const button = createCategoryButton('Poista esto');
+            button.addEventListener('click', function () {
+                unblock(client, button);
+            });
+            actions.appendChild(button);
+        }
+        const failures = block.failures + (block.banned ? ' (estetty)' : ' (odottaa)');
+        return row([cell(block.ip), cell(countryElement(client ? client.country : null)), cell(failures),
+            cell(until), cell(actions)]);
+    }
+
+    function attemptRow(attempt) {
+        const agent = document.createElement('span');
+        agent.className = 'logins-agent';
+        agent.textContent = attempt.user_agent || '–';
+        agent.title = attempt.user_agent;
+        const name = document.createElement('span');
+        name.textContent = attempt.username === '' ? '(tyhjä)' : attempt.username;
+        if (attempt.succeeded) {
+            const badge = document.createElement('span');
+            badge.className = 'logins-badge';
+            badge.textContent = 'Onnistui';
+            name.append(' ', badge);
+        }
+        const tr = row([cell(formatTime(attempt.at)), cell(attempt.ip), cell(countryElement(attempt.country)),
+            cell(name), cell(agent)]);
+        if (attempt.succeeded) {
+            tr.className = 'is-success';
+        }
+        return tr;
+    }
+
+    function clientRow(client) {
+        return row([cell(client.ip), cell(countryElement(client.country)), cell(String(client.failures)),
+            cell(String(client.successes)), cell(formatTime(client.last_seen)), cell(formatTime(client.first_seen))]);
+    }
+
+    function render() {
+        const data = latest;
+        const summary = loginSummary(data);
+        elements.failedDay.textContent = String(summary.failed);
+        elements.addressesDay.textContent = String(summary.addresses);
+        elements.blockedNow.textContent = String(summary.blocked);
+
+        const clientsByIp = new Map();
+        for (const client of data.report.clients) {
+            clientsByIp.set(client.ip, client);
+        }
+        const blockedRows = [];
+        for (const block of data.blocked) {
+            blockedRows.push(blockedRow(block, clientsByIp));
+        }
+        fillTable(elements.blockedTable, elements.blockedRows, elements.blockedEmpty, blockedRows);
+
+        const attemptRows = [];
+        for (const attempt of data.report.attempts) {
+            if (showSucceeded.checked || !attempt.succeeded) {
+                attemptRows.push(attemptRow(attempt));
+            }
+        }
+        elements.attemptsTitle.textContent = showSucceeded.checked ? 'Kirjautumisyritykset' : 'Epäonnistuneet yritykset';
+        elements.attemptsEmpty.textContent = showSucceeded.checked
+            ? 'Ei kirjautumisyrityksiä.'
+            : 'Ei epäonnistuneita kirjautumisyrityksiä.';
+        fillTable(elements.attemptsTable, elements.attemptsRows, elements.attemptsEmpty, attemptRows);
+
+        const clientRows = [];
+        for (const client of data.report.clients) {
+            clientRows.push(clientRow(client));
+        }
+        fillTable(elements.clientsTable, elements.clientsRows, elements.clientsEmpty, clientRows);
+    }
+
+    async function load() {
+        try {
+            latest = await api('GET', '/api/login-attempts');
+        } catch (error) {
+            if (error.status !== 401) {
+                status.hidden = false;
+                status.textContent = messageFor(error, 'Kirjautumistietojen lataaminen epäonnistui.');
+            }
+            return;
+        }
+        status.hidden = true;
+        content.hidden = false;
+        render();
+    }
+
+    showSucceeded.addEventListener('change', function () {
+        if (latest) {
+            render();
+        }
+    });
+    refreshButton.addEventListener('click', load);
+    window.setInterval(function () {
+        if (!document.hidden) {
+            load();
+        }
+    }, REFRESH_MS);
+
+    async function start() {
+        await requireSession();
+        await load();
+    }
+    start();
+}
+
 document.addEventListener('DOMContentLoaded', function () {
     const page = document.body.getAttribute('data-page');
     if (page === 'login') {
@@ -805,5 +1111,7 @@ document.addEventListener('DOMContentLoaded', function () {
         initEditPage();
     } else if (page === 'images') {
         KasinGallery.initPage();
+    } else if (page === 'logins') {
+        initLoginsPage();
     }
 });

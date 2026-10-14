@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="fi">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="robots" content="noindex">
+  <title>Kirjautumiset &mdash; Kotoa käsin</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=Work+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/css/admin.css">
+</head>
+<body data-page="logins">
+
+  <header class="site-header admin-header">
+    <div class="nav-container">
+      <a href="/hallinta" class="logo">Kotoa käsin<span class="logo-badge">Hallinta</span></a>
+      <nav class="admin-nav">
+        <a href="/hallinta">Reseptit</a>
+        <a href="/hallinta/kuvat">Kuvat</a>
+        <a href="/hallinta/kirjautumiset" aria-current="page">Kirjautumiset</a>
+        <span class="admin-user" id="adminUser"></span>
+        <a href="/" target="_blank" rel="noopener">Sivusto</a>
+        <button type="button" id="logoutButton">Kirjaudu ulos</button>
+      </nav>
+    </div>
+  </header>
+
+  <main class="admin-main">
+    <div class="container">
+      <div class="admin-toolbar">
+        <div>
+          <h1>Kirjautumiset</h1>
+          <p>Kirjautumisyritykset hallintaan. Toistuvien virheiden jälkeen osoitteen täytyy odottaa
+            ennen seuraavaa yritystä, ja kymmenen virheen jälkeen se estetään 15 minuutiksi.</p>
+        </div>
+        <button type="button" class="btn btn-ghost" id="loginsRefresh">Päivitä</button>
+      </div>
+
+      <p class="form-error" id="loginsError" role="alert"></p>
+      <p class="admin-status" id="loginsStatus" aria-live="polite">Ladataan&hellip;</p>
+
+      <div id="loginsContent" hidden>
+        <dl class="logins-summary">
+          <div>
+            <dt>Epäonnistuneita yrityksiä 24 h</dt>
+            <dd id="loginsFailedDay">0</dd>
+          </div>
+          <div>
+            <dt>Eri osoitteita 24 h</dt>
+            <dd id="loginsAddressesDay">0</dd>
+          </div>
+          <div>
+            <dt>Estettynä nyt</dt>
+            <dd id="loginsBlockedNow">0</dd>
+          </div>
+        </dl>
+
+        <section class="logins-section" aria-labelledby="blockedTitle">
+          <h2 id="blockedTitle">Estetyt osoitteet</h2>
+          <p class="form-hint" id="blockedEmpty">Yksikään osoite ei ole nyt estetty.</p>
+          <div class="logins-table-wrap">
+            <table class="logins-table" id="blockedTable" hidden>
+              <thead>
+                <tr>
+                  <th scope="col">Osoite</th>
+                  <th scope="col">Maa</th>
+                  <th scope="col">Virheitä</th>
+                  <th scope="col">Esto päättyy</th>
+                  <th scope="col"><span class="visually-hidden">Toiminnot</span></th>
+                </tr>
+              </thead>
+              <tbody id="blockedRows"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="logins-section" aria-labelledby="attemptsTitle">
+          <div class="logins-section-header">
+            <h2 id="attemptsTitle">Epäonnistuneet yritykset</h2>
+            <label class="logins-toggle">
+              <input type="checkbox" id="showSucceeded"> Näytä myös onnistuneet
+            </label>
+          </div>
+          <p class="form-hint" id="attemptsEmpty">Ei epäonnistuneita kirjautumisyrityksiä.</p>
+          <div class="logins-table-wrap">
+            <table class="logins-table" id="attemptsTable" hidden>
+              <thead>
+                <tr>
+                  <th scope="col">Aika</th>
+                  <th scope="col">Osoite</th>
+                  <th scope="col">Maa</th>
+                  <th scope="col">Käyttäjätunnus</th>
+                  <th scope="col">Selain</th>
+                </tr>
+              </thead>
+              <tbody id="attemptsRows"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="logins-section" aria-labelledby="clientsTitle">
+          <h2 id="clientsTitle">Osoitteet</h2>
+          <p class="form-hint">Jokainen osoite, josta on yritetty kirjautua. Tiedot säilytetään 90 päivää.</p>
+          <p class="form-hint" id="clientsEmpty">Ei vielä yhtään kirjautumisyritystä.</p>
+          <div class="logins-table-wrap">
+            <table class="logins-table" id="clientsTable" hidden>
+              <thead>
+                <tr>
+                  <th scope="col">Osoite</th>
+                  <th scope="col">Maa</th>
+                  <th scope="col">Epäonnistuneita</th>
+                  <th scope="col">Onnistuneita</th>
+                  <th scope="col">Viimeksi</th>
+                  <th scope="col">Ensimmäisen kerran</th>
+                </tr>
+              </thead>
+              <tbody id="clientsRows"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <p class="logins-attribution">Maatiedot: <a href="https://db-ip.com" target="_blank" rel="noopener">IP Geolocation by DB-IP</a></p>
+      </div>
+    </div>
+  </main>
+
+  <script src="/js/admin.js"></script>
+</body>
+</html>
