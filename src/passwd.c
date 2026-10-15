@@ -16,6 +16,7 @@
  * the password itself is kept nowhere.
  */
 
+#include <assert.h>
 #include <errno.h>
 #include <getopt.h>
 #include <stdio.h>
@@ -29,15 +30,23 @@
 #include "password.h"
 #include "str.h"
 
-#define MIN_PASSWORD_LENGTH 12
-#define MAX_PASSWORD_LENGTH 128
-#define GENERATED_LENGTH    24
+enum {
+    /** Shortest password accepted, in characters. */
+    MIN_PASSWORD_LENGTH = 12,
+    /** Longest password accepted, in characters. */
+    MAX_PASSWORD_LENGTH = 128,
+    /** Length of a password made with -g, in characters. */
+    GENERATED_LENGTH = 24,
+};
 
 /**
  * Letters and digits for generated passwords, without ones easily confused
  * when read or typed: 0/O, 1/l/I.
  */
-static Str const GENERATED_ALPHABET = STR_INIT("abcdefghijkmnopqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789");
+static Str const GENERATED_ALPHABET = STR_INIT(
+    "abcdefghijkmnopqrstuvwxyz"
+    "ABCDEFGHJKLMNPQRSTUVWXYZ"
+    "23456789");
 
 static void usage(char const *program) {
     fprintf(stderr,
@@ -54,6 +63,8 @@ static void usage(char const *program) {
  * @return False at end of input or when the line does not fit.
  */
 static bool read_line(char *buf, size_t capacity, size_t *len) {
+    assert(buf != NULL);
+    assert(len != NULL);
     if (fgets(buf, (int)capacity, stdin) == NULL) {
         return false;
     }
@@ -74,6 +85,8 @@ static bool read_line(char *buf, size_t capacity, size_t *len) {
  * Asks for a password on the terminal with echo turned off.
  */
 static bool prompt_password(char const *prompt, char *buf, size_t capacity, size_t *len) {
+    assert(buf != NULL);
+    assert(len != NULL);
     fputs(prompt, stderr);
     fflush(stderr);
     struct termios saved;
@@ -96,6 +109,7 @@ static bool prompt_password(char const *prompt, char *buf, size_t capacity, size
  * make some letters more likely than others are drawn again.
  */
 static bool generate_password(char *buf, size_t length) {
+    assert(buf != NULL);
     size_t const limit = 256 - 256 % GENERATED_ALPHABET.len;
     size_t filled = 0;
     while (filled < length) {
@@ -110,6 +124,56 @@ static bool generate_password(char *buf, size_t length) {
         }
     }
     return true;
+}
+
+/**
+ * Gets the new password: made at random with -g, otherwise typed twice on the
+ * terminal or read from the first line of the input.
+ *
+ * @param password Receives the password.
+ * @param capacity Size of password in bytes.
+ * @param length Receives the length of the password in bytes.
+ * @return EXIT_SUCCESS, or the sysexits.h code for what went wrong.
+ */
+static int obtain_password(bool generate, char *password, size_t capacity, size_t *length) {
+    assert(password != NULL);
+    assert(length != NULL);
+    if (generate) {
+        *length = GENERATED_LENGTH;
+        if (!generate_password(password, *length)) {
+            perror("getrandom");
+            return EX_OSERR;
+        }
+        fprintf(stderr, "Password: %.*s\n"
+                        "Store it in a password manager; it is not shown again.\n",
+                (int)*length, password);
+        return EXIT_SUCCESS;
+    }
+
+    if (!isatty(STDIN_FILENO)) {
+        if (!read_line(password, capacity, length)) {
+            fprintf(stderr, "no password read, or longer than %d characters\n",
+                    MAX_PASSWORD_LENGTH);
+            return EX_DATAERR;
+        }
+        return EXIT_SUCCESS;
+    }
+
+    char again[MAX_PASSWORD_LENGTH + 2];
+    size_t again_length = 0;
+    if (!prompt_password("New admin password: ", password, capacity, length) ||
+        !prompt_password("Again: ", again, sizeof again, &again_length)) {
+        fprintf(stderr, "no password read, or longer than %d characters\n", MAX_PASSWORD_LENGTH);
+        return EX_DATAERR;
+    }
+    bool const same = str_eq(str_make(password, *length), str_make(again, again_length));
+    explicit_bzero(again, sizeof again);
+    if (!same) {
+        fprintf(stderr, "the passwords differ\n");
+        explicit_bzero(password, capacity);
+        return EX_DATAERR;
+    }
+    return EXIT_SUCCESS;
 }
 
 int main(int argc, char **argv) {
@@ -141,43 +205,22 @@ int main(int argc, char **argv) {
 
     char password[MAX_PASSWORD_LENGTH + 2];  // The line break and the terminator.
     size_t length = 0;
-    if (generate) {
-        length = GENERATED_LENGTH;
-        if (!generate_password(password, length)) {
-            perror("getrandom");
-            return EX_OSERR;
-        }
-        fprintf(stderr, "Password: %.*s\nStore it in a password manager; it is not shown again.\n",
-                (int)length, password);
-    } else if (isatty(STDIN_FILENO)) {
-        char again[MAX_PASSWORD_LENGTH + 2];
-        size_t again_length = 0;
-        if (!prompt_password("New admin password: ", password, sizeof password, &length) ||
-            !prompt_password("Again: ", again, sizeof again, &again_length)) {
-            fprintf(stderr, "no password read, or longer than %d characters\n", MAX_PASSWORD_LENGTH);
-            return EX_DATAERR;
-        }
-        bool const same = str_eq(str_make(password, length), str_make(again, again_length));
-        explicit_bzero(again, sizeof again);
-        if (!same) {
-            fprintf(stderr, "the passwords differ\n");
-            explicit_bzero(password, sizeof password);
-            return EX_DATAERR;
-        }
-    } else if (!read_line(password, sizeof password, &length)) {
-        fprintf(stderr, "no password read, or longer than %d characters\n", MAX_PASSWORD_LENGTH);
-        return EX_DATAERR;
+    int const status = obtain_password(generate, password, sizeof password, &length);
+    if (status != EXIT_SUCCESS) {
+        return status;
     }
 
     if (length < MIN_PASSWORD_LENGTH) {
-        fprintf(stderr, "use at least %d characters; a few unrelated words make a good password\n",
+        fprintf(stderr,
+                "use at least %d characters; a few unrelated words make a good password\n",
                 MIN_PASSWORD_LENGTH);
         explicit_bzero(password, sizeof password);
         return EX_DATAERR;
     }
 
     Password_Hash hash;
-    bool const created = password_hash_create(str_make(password, length), (uint32_t)iterations, &hash);
+    bool const created = password_hash_create(str_make(password, length),
+                                              (uint32_t)iterations, &hash);
     explicit_bzero(password, sizeof password);
     if (!created) {
         perror("getrandom");

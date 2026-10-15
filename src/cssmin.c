@@ -1,5 +1,7 @@
 #include "cssmin.h"
 
+#include <assert.h>
+
 /**
  * The pieces a style sheet is read in. The minifier works on these rather than
  * on full CSS tokens: only whitespace and comments need to be told apart from
@@ -91,12 +93,14 @@ static size_t line_of(Str s, size_t offset) {
 }
 
 static bool fail(Minify_Error *error, Str source, size_t offset, Str message) {
+    assert(error != NULL);
     error->line = line_of(source, offset);
     error->message = message;
     return false;
 }
 
 static size_t scan_string(Scanner *sc, size_t start, bool *ok) {
+    assert(ok != NULL);
     Str const s = sc->source;
     unsigned char const quote = byte_at(s, start);
     size_t pos = start + 1;
@@ -143,6 +147,7 @@ static size_t scan_escape(Scanner *sc, size_t start) {
  * "url(" is read as ordinary bytes and the string as a string.
  */
 static size_t scan_url(Scanner *sc, size_t start, bool *ok) {
+    assert(ok != NULL);
     Str const s = sc->source;
     size_t pos = start + 4;
     while (pos < s.len && is_space(byte_at(s, pos))) {
@@ -162,6 +167,7 @@ static size_t scan_url(Scanner *sc, size_t start, bool *ok) {
 }
 
 static bool next_piece(Scanner *sc, Piece *p) {
+    assert(p != NULL);
     Str const s = sc->source;
     size_t const start = sc->pos;
     p->offset = start;
@@ -191,7 +197,8 @@ static bool next_piece(Scanner *sc, Piece *p) {
     } else if (c == '\\') {
         end = scan_escape(sc, start);
         p->kind = PIECE_ESCAPE;
-    } else if (starts_with_nocase(s, start, STR("url(")) && (start == 0 || !is_name_byte(byte_at(s, start - 1)))) {
+    } else if (starts_with_nocase(s, start, STR("url(")) &&
+               (start == 0 || !is_name_byte(byte_at(s, start - 1)))) {
         size_t const url_end = scan_url(sc, start, &ok);
         if (url_end != 0) {
             end = url_end;
@@ -215,14 +222,18 @@ static bool next_piece(Scanner *sc, Piece *p) {
  * is not part of a longer name or number such as 10.5 or x0.5.
  */
 static bool is_leading_zero(Str s, size_t offset) {
-    if (byte_at(s, offset) != '0' || byte_at(s, offset + 1) != '.' || !is_digit(byte_at(s, offset + 2))) {
+    bool const decimal = byte_at(s, offset) == '0' && byte_at(s, offset + 1) == '.' &&
+                         is_digit(byte_at(s, offset + 2));
+    if (!decimal) {
         return false;
     }
     if (offset == 0) {
         return true;
     }
     unsigned char const before = byte_at(s, offset - 1);
-    if ((before == '-' || before == '+') && (offset == 1 || !is_name_byte(byte_at(s, offset - 2)))) {
+    bool const signed_number = (before == '-' || before == '+') &&
+                               (offset == 1 || !is_name_byte(byte_at(s, offset - 2)));
+    if (signed_number) {
         return true;  // A sign: -0.5 is -.5.
     }
     return !is_name_byte(before) && before != '.' && before != '#';
@@ -269,6 +280,8 @@ static bool ends_custom_property_name(Str_Builder const *out) {
  * that is not inside brackets, which is left for the caller to read.
  */
 static bool copy_custom_property_value(Scanner *sc, Str_Builder *out, unsigned char *last) {
+    assert(out != NULL);
+    assert(last != NULL);
     size_t const start = sc->pos;
     size_t nesting = 0;
     Piece p;
@@ -302,6 +315,8 @@ static bool copy_custom_property_value(Scanner *sc, Str_Builder *out, unsigned c
 }
 
 bool css_minify(Str source, Str_Builder *out, Minify_Error *error) {
+    assert(out != NULL);
+    assert(error != NULL);
     Scanner sc = {
         .source = source,
         .pos = 0,
@@ -359,7 +374,8 @@ bool css_minify(Str source, Str_Builder *out, Minify_Error *error) {
         }
         last = (unsigned char)p.text.data[p.text.len - 1];
 
-        if (p.kind == PIECE_CHAR && first == ':' && !out->overflow && ends_custom_property_name(out)) {
+        bool const property_colon = p.kind == PIECE_CHAR && first == ':' && !out->overflow;
+        if (property_colon && ends_custom_property_name(out)) {
             if (!copy_custom_property_value(&sc, out, &last)) {
                 return false;
             }
@@ -377,6 +393,7 @@ bool css_minify(Str source, Str_Builder *out, Minify_Error *error) {
 }
 
 bool css_check(Str source, Minify_Error *error) {
+    assert(error != NULL);
     Scanner sc = {
         .source = source,
         .pos = 0,
@@ -410,10 +427,14 @@ bool css_check(Str source, Minify_Error *error) {
             }
             Str const word = str_slice(source, name, end);
             if (str_eq_nocase(word, STR("import"))) {
-                return fail(error, source, p.offset, STR("@import cannot be bundled; list the file in the manifest instead"));
+                return fail(error, source, p.offset,
+                            STR("@import cannot be bundled; list the file in the manifest "
+                                "instead"));
             }
             if (str_eq_nocase(word, STR("charset"))) {
-                return fail(error, source, p.offset, STR("@charset is only valid at the start of a style sheet; bundles are UTF-8 without it"));
+                return fail(error, source, p.offset,
+                            STR("@charset is only valid at the start of a style sheet; "
+                                "bundles are UTF-8 without it"));
             }
         }
     }

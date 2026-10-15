@@ -1,5 +1,6 @@
 #include "sql.h"
 
+#include <assert.h>
 #include <stdio.h>
 
 bool sql_exec(sqlite3 *conn, Str sql, Str context) {
@@ -31,6 +32,7 @@ bool sql_exec(sqlite3 *conn, Str sql, Str context) {
 }
 
 bool sql_prepare(sqlite3 *conn, sqlite3_stmt **stmt, Str sql, bool persistent) {
+    assert(stmt != NULL);
     unsigned int flags = persistent ? SQLITE_PREPARE_PERSISTENT : 0;
     if (sqlite3_prepare_v3(conn, sql.data, (int)sql.len, flags, stmt, NULL) != SQLITE_OK) {
         fprintf(stderr, "db: cannot prepare statement: %s\n", sqlite3_errmsg(conn));

@@ -16,15 +16,12 @@
 #include <stddef.h>
 #include <stdint.h>
 
-/**
- * Smallest block, including its header.
- */
-#define BUDDY_MIN_BLOCK 64
-
-/**
- * Upper bound on block orders; allows heaps up to BUDDY_MIN_BLOCK << 31 bytes.
- */
-#define BUDDY_MAX_ORDERS 32
+enum {
+    /** Smallest block, including its header, in bytes. */
+    BUDDY_MIN_BLOCK = 64,
+    /** Upper bound on block orders: heaps up to BUDDY_MIN_BLOCK << 31 bytes. */
+    BUDDY_MAX_ORDERS = 32,
+};
 
 typedef struct Buddy_Header Buddy_Header;
 

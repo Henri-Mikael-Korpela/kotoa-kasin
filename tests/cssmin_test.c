@@ -23,7 +23,10 @@ static void expect_minified(char const *input, char const *expected) {
         return;
     }
     if (!str_eq(str_builder_str(&out), str_from_cstr(expected))) {
-        printf("FAIL %s\n  got  %.*s\n  want %s\n", input, STR_ARG(str_builder_str(&out)), expected);
+        printf("FAIL %s\n  got  %.*s\n  want %s\n",
+               input,
+               STR_ARG(str_builder_str(&out)),
+               expected);
         FAILURES++;
     }
 }
@@ -39,7 +42,12 @@ static void expect_minify_error(char const *input, size_t line, char const *mess
         return;
     }
     if (error.line != line || !str_eq(error.message, str_from_cstr(message))) {
-        printf("FAIL %s\n  got  line %zu: %.*s\n  want line %zu: %s\n", input, error.line, STR_ARG(error.message), line, message);
+        printf("FAIL %s\n  got  line %zu: %.*s\n  want line %zu: %s\n",
+               input,
+               error.line,
+               STR_ARG(error.message),
+               line,
+               message);
         FAILURES++;
     }
 }
@@ -49,21 +57,26 @@ static void expect_check(char const *input, size_t line, char const *message) {
     bool const ok = css_check(str_from_cstr(input), &error);
     if (message == NULL) {
         if (!ok) {
-            printf("FAIL check %s\n  unexpected error on line %zu: %.*s\n", input, error.line, STR_ARG(error.message));
+            printf("FAIL check %s\n  unexpected error on line %zu: %.*s\n",
+                   input,
+                   error.line,
+                   STR_ARG(error.message));
             FAILURES++;
         }
         return;
     }
     if (ok || error.line != line || !str_eq(error.message, str_from_cstr(message))) {
-        printf("FAIL check %s\n  got  %s line %zu: %.*s\n  want line %zu: %s\n", input, ok ? "success," : "error",
-               ok ? 0 : error.line, STR_ARG(ok ? STR("") : error.message), line, message);
+        printf("FAIL check %s\n  got  %s line %zu: %.*s\n  want line %zu: %s\n", input,
+               ok ? "success," : "error", ok ? 0 : error.line,
+               STR_ARG(ok ? STR("") : error.message), line, message);
         FAILURES++;
     }
 }
 
 int main(void) {
     // Comments and whitespace.
-    expect_minified("/* Header. */\n.a {\n  color: red;\n  margin: 0 auto;\n}\n", ".a{color:red;margin:0 auto}");
+    expect_minified("/* Header. */\n.a {\n  color: red;\n  margin: 0 auto;\n}\n",
+                    ".a{color:red;margin:0 auto}");
     expect_minified("a , b > c ~ d { x : y ; }", "a,b>c~d{x :y}");
     expect_minified(".a .b, .c:hover::after { }", ".a .b,.c:hover::after{}");
     expect_minified("p {}\n\n\n/* gap */\n\n.q {}", "p{}.q{}");
@@ -72,9 +85,12 @@ int main(void) {
     expect_minified("a :hover { }", "a :hover{}");
     expect_minified("a + b { }", "a + b{}");
     expect_minified("a [href] { }", "a [href]{}");
-    expect_minified("x { width: calc(100% - 2 * var(--gap)); }", "x{width:calc(100% - 2 * var(--gap))}");
-    expect_minified("@media screen and (max-width: 600px) { a { b: c } }", "@media screen and (max-width:600px){a{b:c}}");
-    expect_minified("x { transform: translate(1px, 2px) rotate(3deg); }", "x{transform:translate(1px,2px) rotate(3deg)}");
+    expect_minified("x { width: calc(100% - 2 * var(--gap)); }",
+                    "x{width:calc(100% - 2 * var(--gap))}");
+    expect_minified("@media screen and (max-width: 600px) { a { b: c } }",
+                    "@media screen and (max-width:600px){a{b:c}}");
+    expect_minified("x { transform: translate(1px, 2px) rotate(3deg); }",
+                    "x{transform:translate(1px,2px) rotate(3deg)}");
     expect_minified("x { font: 12px / 1.5 serif; }", "x{font:12px / 1.5 serif}");
     expect_minified("x { color: red !important; }", "x{color:red!important}");
     expect_minified("x { margin: 1px/**/2px; }", "x{margin:1px 2px}");
@@ -91,12 +107,15 @@ int main(void) {
     expect_minified("x { content: \"\\\"\"; }", "x{content:\"\\\"\"}");
     expect_minified("x { content: '\\1F33F'; }", "x{content:'\\1F33F'}");
     expect_minified(".\\31 0 { }", ".\\31 0{}");
-    expect_minified("x { background: url( /a/b c.png ) no-repeat; }", "x{background:url(/a/b c.png) no-repeat}");
+    expect_minified("x { background: url( /a/b c.png ) no-repeat; }",
+                    "x{background:url(/a/b c.png) no-repeat}");
     expect_minified("x { background: url( \"/a b.png\" ); }", "x{background:url(\"/a b.png\")}");
-    expect_minified("x { background: url(http://example.com/a/*b*/.png); }", "x{background:url(http://example.com/a/*b*/.png)}");
+    expect_minified("x { background: url(http://example.com/a/*b*/.png); }",
+                    "x{background:url(http://example.com/a/*b*/.png)}");
 
     // Custom property values are kept as written, only trimmed.
-    expect_minified(":root {\n  --font: 'A', b,  c ;\n  --x:calc( 1px + 2px );\n  --y: { a: b; };\n  --z: 0.5;\n}\n",
+    expect_minified(":root {\n  --font: 'A', b,  c ;\n  --x:calc( 1px + 2px );\n"
+                    "  --y: { a: b; };\n  --z: 0.5;\n}\n",
                     ":root{--font:'A', b,  c;--x:calc( 1px + 2px );--y:{ a: b; };--z:0.5}");
     expect_minified("a { --x: 1px }", "a{--x:1px}");
     expect_minified("a { color: var(--c, 0.5) ; }", "a{color:var(--c,.5)}");
@@ -111,8 +130,13 @@ int main(void) {
 
     // The bundling check.
     expect_check("@media (min-width: 1px) { a { b: c } }\n@keyframes k { from { x: y } }", 0, NULL);
-    expect_check("a { b: c }\n@import url(x.css);", 2, "@import cannot be bundled; list the file in the manifest instead");
-    expect_check("@CHARSET \"utf-8\";", 1, "@charset is only valid at the start of a style sheet; bundles are UTF-8 without it");
+    expect_check("a { b: c }\n@import url(x.css);",
+                 2,
+                 "@import cannot be bundled; list the file in the manifest instead");
+    expect_check("@CHARSET \"utf-8\";",
+                 1,
+                 "@charset is only valid at the start of a style sheet; "
+                 "bundles are UTF-8 without it");
     expect_check("a { content: '@import' }", 0, NULL);
     expect_check("a { b: c", 1, "unclosed {");
 

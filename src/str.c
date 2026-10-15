@@ -1,5 +1,6 @@
 #include "str.h"
 
+#include <assert.h>
 #include <string.h>
 
 static char ascii_lower(char c) {
@@ -141,6 +142,8 @@ bool str_contains_nocase(Str haystack, Str needle) {
 }
 
 bool str_split_once(Str s, Str sep, Str *before, Str *after) {
+    assert(before != NULL);
+    assert(after != NULL);
     size_t pos = str_find(s, sep);
     if (pos == STR_NPOS) {
         return false;
@@ -151,6 +154,7 @@ bool str_split_once(Str s, Str sep, Str *before, Str *after) {
 }
 
 bool str_to_u64(Str s, uint64_t *out) {
+    assert(out != NULL);
     if (s.len == 0) {
         return false;
     }
@@ -171,6 +175,7 @@ bool str_to_u64(Str s, uint64_t *out) {
 }
 
 bool str_to_cstr(Str s, char *buf, size_t capacity) {
+    assert(buf != NULL);
     if (s.len >= capacity || str_find_char(s, '\0') != STR_NPOS) {
         return false;
     }
@@ -182,6 +187,8 @@ bool str_to_cstr(Str s, char *buf, size_t capacity) {
 }
 
 void str_builder_init(Str_Builder *b, char *buf, size_t capacity) {
+    assert(b != NULL);
+    assert(buf != NULL || capacity == 0);
     b->data = buf;
     b->len = 0;
     b->capacity = capacity;
@@ -189,6 +196,7 @@ void str_builder_init(Str_Builder *b, char *buf, size_t capacity) {
 }
 
 bool str_builder_append(Str_Builder *b, Str s) {
+    assert(b != NULL);
     if (s.len > b->capacity - b->len) {
         b->overflow = true;
         return false;
@@ -216,6 +224,7 @@ bool str_builder_append_u64(Str_Builder *b, uint64_t value) {
 }
 
 char const *str_builder_cstr(Str_Builder *b) {
+    assert(b != NULL);
     if (b->overflow || b->len >= b->capacity) {
         return NULL;
     }

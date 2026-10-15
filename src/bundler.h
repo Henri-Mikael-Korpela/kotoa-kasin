@@ -40,7 +40,10 @@
 #include "minify.h"
 #include "str.h"
 
-#define BUNDLER_MAX_SOURCES 64
+enum {
+    /** Most source files in one bundle. */
+    BUNDLER_MAX_SOURCES = 64,
+};
 
 typedef struct {
     Str    name;
@@ -56,8 +59,10 @@ typedef struct {
     char const *program;          /**< The tool's name, for usage and the header of each bundle. */
     Str         source_root;      /**< Directory of the sources, for the header: "js" or "css". */
     Str         extension;        /**< Of sources and bundles: ".js" or ".css". */
-    Str         comment_start;    /**< Starts a one-line comment in the language: two slashes, or slash-star. */
-    Str         comment_end;      /**< Ends it, including the line break: just the line break, or star-slash. */
+    /** Starts a one-line comment in the language: two slashes, or slash-star. */
+    Str         comment_start;
+    /** Ends it, including the line break: just the line break, or star-slash. */
+    Str         comment_end;
     Str         prologue;         /**< Written after the header when minifying. */
     Str         prologue_plain;   /**< The same with -n. */
     Str         epilogue;         /**< Written after the sources when minifying. */

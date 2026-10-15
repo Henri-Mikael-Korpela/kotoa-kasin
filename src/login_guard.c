@@ -1,8 +1,12 @@
 #include "login_guard.h"
 
+#include <assert.h>
 #include <string.h>
 
-#define CHECK_PERIOD_SEC (60 / LOGIN_CHECKS_PER_MINUTE)  // One more check is allowed this often.
+enum {
+    /** One more password check is allowed this often, in seconds. */
+    CHECK_PERIOD_SEC = 60 / LOGIN_CHECKS_PER_MINUTE,
+};
 
 int64_t login_guard_wait(uint32_t failures) {
     if (failures >= LOGIN_BAN_FAILURES) {
@@ -96,12 +100,16 @@ static void refill(Login_Guard *g, int64_t now) {
         return;
     }
     int64_t const tokens = (int64_t)g->tokens + periods;
-    g->tokens = tokens >= LOGIN_CHECKS_PER_MINUTE ? LOGIN_CHECKS_PER_MINUTE : (uint32_t)tokens;
-    g->tokens_at = g->tokens == LOGIN_CHECKS_PER_MINUTE ? now : g->tokens_at + periods * CHECK_PERIOD_SEC;
+    bool const full = tokens >= LOGIN_CHECKS_PER_MINUTE;
+    g->tokens = full ? LOGIN_CHECKS_PER_MINUTE : (uint32_t)tokens;
+    g->tokens_at = full ? now : g->tokens_at + periods * CHECK_PERIOD_SEC;
 }
 
 // Counts a refusal and says whether this one is to be logged.
 static void count_refusal(uint32_t *refused, int64_t *logged_at, int64_t now, Login_Decision *d) {
+    assert(refused != NULL);
+    assert(logged_at != NULL);
+    assert(d != NULL);
     (*refused)++;
     if (now - *logged_at >= LOGIN_REFUSAL_LOG_SEC) {
         d->log_refusal = true;
@@ -160,7 +168,8 @@ void login_guard_succeeded(Login_Guard *g, Ip_Address const *ip) {
     login_guard_clear(g, ip);
 }
 
-void login_guard_restore(Login_Guard *g, Ip_Address const *ip, uint32_t failures, int64_t last_failure) {
+void login_guard_restore(Login_Guard *g, Ip_Address const *ip, uint32_t failures,
+                         int64_t last_failure) {
     if (failures == 0 || last_failure <= 0) {
         return;
     }
@@ -187,6 +196,7 @@ void login_guard_clear(Login_Guard *g, Ip_Address const *ip) {
 }
 
 size_t login_guard_blocks(Login_Guard *g, int64_t now, Login_Block *out, size_t capacity) {
+    assert(out != NULL || capacity == 0);
     size_t count = 0;
     pthread_mutex_lock(&g->lock);
     for (size_t i = 0; i < LOGIN_GUARD_SLOTS && count < capacity; i++) {

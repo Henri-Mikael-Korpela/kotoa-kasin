@@ -58,55 +58,79 @@
 #include "sha256.h"
 #include "str.h"
 
-// Compile-time configuration.
+// Compile-time configuration. The first six can be set with -D (see CMakeLists.txt), so they
+// are macros that the build may override.
 
 #ifndef MAX_CONNS_PER_WORKER
+/** Connection slots per worker thread. */
 #define MAX_CONNS_PER_WORKER 512
 #endif
 #ifndef REQ_BUF_SIZE
+/** Request buffer of each connection, in bytes: the head and a small body. */
 #define REQ_BUF_SIZE 8192
 #endif
 #ifndef RESP_BUF_SIZE
+/** Response buffer of each connection, in bytes. */
 #define RESP_BUF_SIZE 32768
 #endif
 #ifndef BIG_BUF_SIZE
-#define BIG_BUF_SIZE (2 * 1024 * 1024)  // A large request body or response: uploads, long recipes.
+/** A large request body or response, in bytes: uploads, long recipes. */
+#define BIG_BUF_SIZE (2 * 1024 * 1024)
 #endif
 #ifndef BIG_BUFS_PER_WORKER
+/** Large buffers per worker thread. */
 #define BIG_BUFS_PER_WORKER 2
 #endif
 #ifndef DB_HEAP_SIZE
-#define DB_HEAP_SIZE (32 * 1024 * 1024)  // SQLite heap; BUDDY_MIN_BLOCK times a power of two.
+/** The SQLite heap, in bytes: BUDDY_MIN_BLOCK times a power of two. */
+#define DB_HEAP_SIZE (32 * 1024 * 1024)
 #endif
 
-#define MAX_WORKERS       64
-#define EVENT_BATCH       128
-#define ACCEPT_BURST      64
-#define LISTEN_BACKLOG    1024
-#define IDLE_TIMEOUT_SEC  15
-#define MAX_PATH_LEN      1024
-#define HEAD_RESERVE      1024  // Room in front of an in-place body for its head (about 700 bytes at most).
-#define TOKEN_LIFETIME_SEC (8 * 60 * 60)
+enum {
+    /** Most worker threads. */
+    MAX_WORKERS = 64,
+    /** Epoll events taken from the kernel at once. */
+    EVENT_BATCH = 128,
+    /** Connections accepted in one go. */
+    ACCEPT_BURST = 64,
+    /** Length of the queue of connections that are not accepted yet. */
+    LISTEN_BACKLOG = 1024,
+    /** A connection idle this long is closed, in seconds. */
+    IDLE_TIMEOUT_SEC = 15,
+    /** Longest request path or file path, in bytes. */
+    MAX_PATH_LEN = 1024,
+    /** Room in front of an in-place body for its head, in bytes (about 700 are used at most). */
+    HEAD_RESERVE = 1024,
+    /** How long a session token is valid for, in seconds (8 hours). */
+    TOKEN_LIFETIME_SEC = 8 * 60 * 60,
+    /** Alignment of buffers, in bytes: one cache line. */
+    CACHE_LINE = 64,
+    /** Size of a memory page, in bytes. */
+    PAGE_SIZE = 4096,
+    /** Most blocked addresses shown in the login report. */
+    MAX_REPORTED_BLOCKS = 500,
+};
 
-static_assert (RESP_BUF_SIZE >= 4 * HEAD_RESERVE, "RESP_BUF_SIZE too small");
-static_assert (REQ_BUF_SIZE >= 512, "REQ_BUF_SIZE too small");
-static_assert (BIG_BUF_SIZE >= REQ_BUF_SIZE && BIG_BUF_SIZE >= RESP_BUF_SIZE, "BIG_BUF_SIZE too small");
-static_assert (BIG_BUFS_PER_WORKER >= 1, "BIG_BUFS_PER_WORKER must be at least 1");
-
-#define CACHE_LINE 64
+static_assert(RESP_BUF_SIZE >= 4 * HEAD_RESERVE, "RESP_BUF_SIZE too small");
+static_assert(REQ_BUF_SIZE >= 512, "REQ_BUF_SIZE too small");
+static_assert(BIG_BUF_SIZE >= REQ_BUF_SIZE && BIG_BUF_SIZE >= RESP_BUF_SIZE,
+              "BIG_BUF_SIZE too small");
+static_assert(BIG_BUFS_PER_WORKER >= 1, "BIG_BUFS_PER_WORKER must be at least 1");
 
 // Connection / worker state.
 
-enum {
+typedef enum {
+    /** Waiting for a whole request. */
     ST_READING,
+    /** Sending the response. */
     ST_WRITING,
-};
+} Conn_State;
 
 typedef struct Conn {
     int           fd;  /**< -1 when the slot is free. */
     uint32_t      events;  /**< Epoll events currently registered. */
-    int           state;
-    int           keepalive;
+    Conn_State    state;
+    bool          keepalive;  /**< Whether the connection stays open after the response. */
     uint32_t      req_len;  /**< Bytes buffered in in. */
     uint32_t      resp_pos;  /**< Next byte of out to send. */
     uint32_t      resp_end;  /**< One past last byte of out. */
@@ -279,6 +303,18 @@ static Str mime_for(Str path) {
 static Str const JSON_TYPE = STR_INIT("application/json; charset=utf-8");
 static Str const NO_STORE = STR_INIT("Cache-Control: no-store\r\n");
 
+// Headers of 405 responses: which methods the path does answer.
+static Str const ALLOW_GET_HEAD = STR_INIT(
+    "Cache-Control: no-store\r\nAllow: GET, HEAD\r\n");
+static Str const ALLOW_GET_HEAD_POST = STR_INIT(
+    "Cache-Control: no-store\r\nAllow: GET, HEAD, POST\r\n");
+static Str const ALLOW_GET_HEAD_PUT_DELETE = STR_INIT(
+    "Cache-Control: no-store\r\nAllow: GET, HEAD, PUT, DELETE\r\n");
+static Str const ALLOW_POST = STR_INIT(
+    "Cache-Control: no-store\r\nAllow: POST\r\n");
+static Str const ALLOW_DELETE = STR_INIT(
+    "Cache-Control: no-store\r\nAllow: DELETE\r\n");
+
 static Str status_reason(int status) {
     switch (status) {
     case 200:
@@ -340,32 +376,53 @@ static Str const SECURITY_HEADERS = STR_INIT(
     "Strict-Transport-Security: max-age=31536000\r\n");
 
 /**
+ * The parts of a response that vary: everything but the body.
+ */
+typedef struct {
+    int  status;
+    Str  content_type;
+    /** Complete header lines, each ending in "\r\n"; may be empty. */
+    Str  extra_headers;
+    /** The request was HEAD: the head is sent without the body. */
+    bool head_only;
+} Reply;
+
+static Reply make_reply(int status, Str content_type, bool head_only, Str extra_headers) {
+    return (Reply) {
+        .status = status,
+        .content_type = content_type,
+        .extra_headers = extra_headers,
+        .head_only = head_only,
+    };
+}
+
+/**
  * Appends a status line and the common headers, up to and including the blank line.
  */
-static void write_head(Str_Builder *b, Conn const *c, int status, Str ctype,
-                       uint64_t content_length, Str extra_headers) {
+static void write_head(Str_Builder *b, Conn const *c, Reply const *reply,
+                       uint64_t content_length) {
+    assert(b != NULL);
     str_builder_append(b, STR("HTTP/1.1 "));
-    str_builder_append_u64(b, (uint64_t)status);
+    str_builder_append_u64(b, (uint64_t)reply->status);
     str_builder_append(b, STR(" "));
-    str_builder_append(b, status_reason(status));
+    str_builder_append(b, status_reason(reply->status));
     str_builder_append(b, STR("\r\nServer: kasin\r\nContent-Type: "));
-    str_builder_append(b, ctype);
+    str_builder_append(b, reply->content_type);
     str_builder_append(b, STR("\r\nContent-Length: "));
     str_builder_append_u64(b, content_length);
     str_builder_append(b, STR("\r\nConnection: "));
     str_builder_append(b, c->keepalive ? STR("keep-alive") : STR("close"));
     str_builder_append(b, STR("\r\n"));
     str_builder_append(b, SECURITY_HEADERS);
-    str_builder_append(b, extra_headers);
+    str_builder_append(b, reply->extra_headers);
     str_builder_append(b, STR("\r\n"));
 }
 
-static void respond_simple(Conn *c, int status, Str ctype, Str body, bool head_only,
-                           Str extra_headers) {
+static void respond_simple(Conn *c, Reply const *reply, Str body) {
     Str_Builder b;
     str_builder_init(&b, (char *)c->out, c->out_cap);
-    write_head(&b, c, status, ctype, body.len, extra_headers);
-    if (!head_only) {
+    write_head(&b, c, reply, body.len);
+    if (!reply->head_only) {
         str_builder_append(&b, body);
     }
     c->resp_pos = 0;
@@ -381,15 +438,16 @@ static void respond_error(Conn *c, int status, bool head_only) {
     str_builder_append(&body, status_reason(status));
     str_builder_append(&body, STR("\n"));
     Str extra = status == 405 ? STR("Allow: GET, HEAD\r\n") : STR("");
-    respond_simple(c, status, STR("text/plain; charset=utf-8"), str_builder_str(&body),
-                   head_only, extra);
+    Reply const reply = make_reply(status, STR("text/plain; charset=utf-8"), head_only, extra);
+    respond_simple(c, &reply, str_builder_str(&body));
 }
 
 /**
  * Starts a response body that is built in place in the response buffer,
- * behind HEAD_RESERVE bytes kept free for the head. Finish with respond_built().
+ * behind HEAD_RESERVE bytes kept free for the head. Finish with respond_json().
  */
 static void body_begin(Conn *c, Str_Builder *body) {
+    assert(body != NULL);
     str_builder_init(body, (char *)c->out + HEAD_RESERVE, c->out_cap - HEAD_RESERVE);
 }
 
@@ -397,16 +455,17 @@ static void body_begin(Conn *c, Str_Builder *body) {
  * Writes the head right in front of a body started with body_begin(), so the
  * response is one contiguous span and Content-Length is exact.
  */
-static void respond_built(Conn *c, int status, Str ctype, Str_Builder const *body,
-                          bool head_only, Str extra_headers) {
+static void respond_json(Conn *c, int status, Str_Builder const *body, bool head_only,
+                         Str extra_headers) {
     if (body->overflow) {
         respond_error(c, 500, head_only);
         return;
     }
+    Reply const reply = make_reply(status, JSON_TYPE, head_only, extra_headers);
     char head_buf[HEAD_RESERVE];
     Str_Builder head;
     str_builder_init(&head, head_buf, sizeof head_buf);
-    write_head(&head, c, status, ctype, body->len, extra_headers);
+    write_head(&head, c, &reply, body->len);
     if (head.overflow) {
         respond_error(c, 500, head_only);
         return;
@@ -425,7 +484,7 @@ static void respond_json_error(Conn *c, int status, Str message, Str extra_heade
     str_builder_append(&body, STR("{\"error\":\""));
     str_builder_append(&body, message);
     str_builder_append(&body, STR("\"}"));
-    respond_built(c, status, JSON_TYPE, &body, false, extra_headers);
+    respond_json(c, status, &body, false, extra_headers);
 }
 
 static void respond_db_error(Conn *c, Db_Status status) {
@@ -462,10 +521,16 @@ static Str const WELCOME = STR_INIT(
  * struct layout are the same on every architecture.
  */
 #ifndef SYS_openat2
+// The system call number of openat2(), the same on every architecture.
 #define SYS_openat2 437
 #endif
-#define RESOLVE_NO_SYMLINKS_FLAG 0x04
-#define RESOLVE_BENEATH_FLAG     0x08
+
+enum {
+    /** openat2() resolve flag: refuse symbolic links anywhere on the path. */
+    RESOLVE_NO_SYMLINKS_FLAG = 0x04,
+    /** openat2() resolve flag: refuse paths that leave the starting directory. */
+    RESOLVE_BENEATH_FLAG = 0x08,
+};
 
 typedef struct {
     uint64_t flags;
@@ -518,6 +583,7 @@ static int open_beneath(int dir_fd, char const *path) {
  * @return The descriptor, or -1 with errno set.
  */
 static int open_in_root(Str rel_path, struct stat *st) {
+    assert(st != NULL);
     char rel_path_z[MAX_PATH_LEN];  // openat2() needs a NUL-terminated path.
     if (ROOT_FD < 0) {
         errno = ENOENT;
@@ -544,20 +610,19 @@ static int open_in_root(Str rel_path, struct stat *st) {
  * Writes the response head and keeps the file open so its body can be streamed
  * with sendfile(), whatever its size. Takes ownership of fd.
  */
-static void send_file(Conn *c, int status, int fd, struct stat const *st, Str mime, bool head_only,
-                      Str extra_headers) {
+static void send_file(Conn *c, Reply const *reply, int fd, struct stat const *st) {
     Str_Builder hdr;
     str_builder_init(&hdr, (char *)c->out, c->out_cap);
-    write_head(&hdr, c, status, mime, (uint64_t)st->st_size, extra_headers);
+    write_head(&hdr, c, reply, (uint64_t)st->st_size);
     if (hdr.overflow) {
         close(fd);
-        respond_error(c, 500, head_only);
+        respond_error(c, 500, reply->head_only);
         return;
     }
     c->resp_pos = 0;
     c->resp_end = (uint32_t)hdr.len;
 
-    if (head_only || st->st_size == 0) {
+    if (reply->head_only || st->st_size == 0) {
         close(fd);
         return;
     }
@@ -593,14 +658,17 @@ static void serve_file(Conn *c, int status, Str rel_path, bool head_only, bool i
 
     if (fd < 0) {
         if (is_root) {  // No index.html yet: show a built-in page.
-            respond_simple(c, 200, STR("text/html; charset=utf-8"), WELCOME, head_only, STR(""));
+            Reply const welcome = make_reply(200, STR("text/html; charset=utf-8"), head_only,
+                                             STR(""));
+            respond_simple(c, &welcome, WELCOME);
         } else {
             bool not_found = path.overflow || errno == ENOENT || errno == ENOTDIR;
             respond_error(c, not_found ? 404 : 500, head_only);
         }
         return;
     }
-    send_file(c, status, fd, &st, mime_for(str_builder_str(&path)), head_only, STR(""));
+    Reply const reply = make_reply(status, mime_for(str_builder_str(&path)), head_only, STR(""));
+    send_file(c, &reply, fd, &st);
 }
 
 /**
@@ -624,8 +692,9 @@ static void serve_upload(Conn *c, Str file_name, bool head_only) {
         respond_error(c, 404, head_only);
         return;
     }
-    send_file(c, 200, fd, &st, mime_for(file_name), head_only,
-              STR("Cache-Control: public, max-age=31536000, immutable\r\n"));
+    Reply const reply = make_reply(200, mime_for(file_name), head_only,
+                                   STR("Cache-Control: public, max-age=31536000, immutable\r\n"));
+    send_file(c, &reply, fd, &st);
 }
 
 // Request parsing.
@@ -656,6 +725,7 @@ typedef struct {
  * headers the server acts on.
  */
 static void scan_headers(Str headers, Request_Headers *h) {
+    assert(h != NULL);
     Str rest = headers;
     while (rest.len > 0) {
         Str line;
@@ -701,6 +771,10 @@ static int64_t unix_now(void) {
     return ts.tv_sec;
 }
 
+static Str jwt_key(void) {
+    return str_make((char const *)JWT_KEY, sizeof JWT_KEY);
+}
+
 static bool authenticate_headers(Request_Headers const *h, Jwt_Claims *claims) {
     Str auth = h->authorization;
     Str scheme = STR("Bearer ");
@@ -708,7 +782,7 @@ static bool authenticate_headers(Request_Headers const *h, Jwt_Claims *claims) {
         return false;
     }
     Str token = str_trim(str_slice(auth, scheme.len, auth.len));
-    return jwt_verify(token, JWT_KEY, sizeof JWT_KEY, unix_now(), claims);
+    return jwt_verify(token, jwt_key(), unix_now(), claims);
 }
 
 static bool authenticate(Request const *r, Jwt_Claims *claims) {
@@ -726,7 +800,7 @@ static void respond_id(Conn *c, int status, int64_t id) {
     str_builder_append(&body, STR("{\"id\":"));
     str_builder_append_u64(&body, (uint64_t)id);
     str_builder_append(&body, STR("}"));
-    respond_built(c, status, JSON_TYPE, &body, false, NO_STORE);
+    respond_json(c, status, &body, false, NO_STORE);
 }
 
 /**
@@ -741,6 +815,7 @@ typedef struct {
 } Login_Client;
 
 static void describe_client(Ip_Address const *address, Login_Client *client) {
+    assert(client != NULL);
     Str_Builder ip;
     str_builder_init(&ip, client->ip_buf, sizeof client->ip_buf);
     ip_format(address, &ip);
@@ -756,6 +831,7 @@ static void describe_client(Ip_Address const *address, Login_Client *client) {
  * outside ASCII) replaced by "?".
  */
 static Str clean_text(Str text, char *buf, size_t capacity, bool ascii_only) {
+    assert(buf != NULL);
     size_t len = text.len < capacity ? text.len : capacity;
     while (len > 0 && len < text.len && ((unsigned char)text.data[len] & 0xC0) == 0x80) {
         len--;  // Do not split a UTF-8 character.
@@ -787,7 +863,7 @@ static void append_client(Str_Builder *out, Login_Client const *client) {
 }
 
 // Writes a finished log line to stderr, which Azure Container Apps keeps as the console log.
-static void log_line(Str_Builder *line) {
+static void log_line(Str_Builder const *line) {
     fprintf(stderr, "%.*s\n", STR_ARG(str_builder_str(line)));
 }
 
@@ -800,7 +876,9 @@ static void log_login_refused(Login_Client const *client, Login_Decision const *
     if (d->verdict == LOGIN_BUSY) {
         str_builder_append(&line, STR(": too many logins from all addresses in the last minute"));
     } else {
-        str_builder_append(&line, d->verdict == LOGIN_BANNED ? STR(": banned after ") : STR(": must wait after "));
+        Str const phrase = d->verdict == LOGIN_BANNED ? STR(": banned after ")
+                                                      : STR(": must wait after ");
+        str_builder_append(&line, phrase);
         str_builder_append_u64(&line, d->failures);
         str_builder_append(&line, STR(" failures"));
     }
@@ -812,7 +890,8 @@ static void log_login_refused(Login_Client const *client, Login_Decision const *
     log_line(&line);
 }
 
-static void log_login_checked(Login_Client const *client, Str username, bool succeeded, Login_Decision const *after) {
+static void log_login_checked(Login_Client const *client, Str username, bool succeeded,
+                              Login_Decision const *after) {
     char buf[512];
     Str_Builder line;
     str_builder_init(&line, buf, sizeof buf);
@@ -823,7 +902,8 @@ static void log_login_checked(Login_Client const *client, Str username, bool suc
     if (!succeeded) {
         str_builder_append(&line, STR("; "));
         str_builder_append_u64(&line, after->failures);
-        str_builder_append(&line, after->failures == 1 ? STR(" recent failure") : STR(" recent failures"));
+        Str const noun = after->failures == 1 ? STR(" recent failure") : STR(" recent failures");
+        str_builder_append(&line, noun);
         if (after->verdict == LOGIN_BANNED) {
             str_builder_append(&line, STR(", now banned for "));
             str_builder_append_u64(&line, (uint64_t)after->retry_after);
@@ -848,8 +928,10 @@ static void respond_login_refused(Conn *c, Login_Decision const *d) {
     Str_Builder body;
     body_begin(c, &body);
     str_builder_append(&body, STR("{\"error\":\""));
-    str_builder_append(&body, d->verdict == LOGIN_BUSY ? STR("too many login attempts right now")
-                                                       : STR("too many failed logins from this address"));
+    Str const message = d->verdict == LOGIN_BUSY
+                        ? STR("too many login attempts right now")
+                        : STR("too many failed logins from this address");
+    str_builder_append(&body, message);
     str_builder_append(&body, STR("\",\"reason\":\""));
     str_builder_append(&body, d->verdict == LOGIN_BUSY     ? STR("busy")
                               : d->verdict == LOGIN_BANNED ? STR("banned")
@@ -857,7 +939,7 @@ static void respond_login_refused(Conn *c, Login_Decision const *d) {
     str_builder_append(&body, STR("\",\"retry_after\":"));
     str_builder_append_u64(&body, (uint64_t)d->retry_after);
     str_builder_append(&body, STR("}"));
-    respond_built(c, 429, JSON_TYPE, &body, false, str_builder_str(&headers));
+    respond_json(c, 429, &body, false, str_builder_str(&headers));
 }
 
 /**
@@ -894,11 +976,11 @@ static void api_login(Worker *w, Conn *c, Request const *r) {
         respond_db_error(c, status);
         return;
     }
-    // Check both fields every time so timing does not reveal which was wrong.
-    bool user_ok = str_eq_constant_time(str_builder_str(&username), ADMIN_USERNAME);
-    bool password_ok = password_verify(str_builder_str(&password), &ADMIN_PASSWORD_HASH);
+    // Both fields are checked every time, so timing does not reveal which was wrong.
+    bool const user_ok = str_eq_constant_time(str_builder_str(&username), ADMIN_USERNAME);
+    bool const password_ok = password_verify(str_builder_str(&password), &ADMIN_PASSWORD_HASH);
     explicit_bzero(password_buf, sizeof password_buf);
-    bool const succeeded = user_ok & password_ok;
+    bool const succeeded = user_ok && password_ok;
 
     char name_buf[100];
     char agent_buf[300];
@@ -911,7 +993,8 @@ static void api_login(Worker *w, Conn *c, Request const *r) {
         .at = now,
     };
     if (db_record_login(&w->db, &attempt) != DB_OK) {
-        fprintf(stderr, "login: could not record the attempt from %.*s in the database\n", STR_ARG(client.ip));
+        fprintf(stderr, "login: could not record the attempt from %.*s in the database\n",
+                STR_ARG(client.ip));
     }
 
     if (!succeeded) {
@@ -919,11 +1002,12 @@ static void api_login(Worker *w, Conn *c, Request const *r) {
         log_login_checked(&client, attempt.username, false, &after);
         Str_Builder body;
         body_begin(c, &body);
-        str_builder_append(&body, STR("{\"error\":\"invalid username or password\",\"retry_after\":"));
+        str_builder_append(&body, STR("{\"error\":\"invalid username or password\","
+                                      "\"retry_after\":"));
         str_builder_append_u64(&body, (uint64_t)after.retry_after);
         str_builder_append(&body, STR("}"));
-        respond_built(c, 401, JSON_TYPE, &body, false,
-                      STR("Cache-Control: no-store\r\nWWW-Authenticate: Bearer\r\n"));
+        respond_json(c, 401, &body, false,
+                     STR("Cache-Control: no-store\r\nWWW-Authenticate: Bearer\r\n"));
         return;
     }
     login_guard_succeeded(&LOGIN_GUARD, &r->client);
@@ -933,23 +1017,22 @@ static void api_login(Worker *w, Conn *c, Request const *r) {
     Str_Builder body;
     body_begin(c, &body);
     str_builder_append(&body, STR("{\"token\":\""));
-    if (!jwt_issue(&body, ADMIN_USERNAME, now, expires_at, JWT_KEY, sizeof JWT_KEY)) {
+    if (!jwt_issue(&body, ADMIN_USERNAME, now, expires_at, jwt_key())) {
         respond_json_error(c, 500, STR("cannot issue token"), NO_STORE);
         return;
     }
     str_builder_append(&body, STR("\",\"expires_at\":"));
     str_builder_append_u64(&body, (uint64_t)expires_at);
     str_builder_append(&body, STR("}"));
-    respond_built(c, 200, JSON_TYPE, &body, false, NO_STORE);
+    respond_json(c, 200, &body, false, NO_STORE);
 }
-
-#define MAX_REPORTED_BLOCKS 500
 
 /**
  * The login report: the addresses that must wait or are banned right now
  * (from memory) and the recorded clients and attempts (from the database).
  */
 static Db_Status build_login_report(Worker *w, int64_t now, Str_Builder *body) {
+    assert(body != NULL);
     Login_Block blocks[MAX_REPORTED_BLOCKS];
     size_t const count = login_guard_blocks(&LOGIN_GUARD, now, blocks, MAX_REPORTED_BLOCKS);
     str_builder_append(body, STR("{\"now\":"));
@@ -964,7 +1047,9 @@ static Db_Status build_login_report(Worker *w, int64_t now, Str_Builder *body) {
         str_builder_append_u64(body, blocks[i].failures);
         str_builder_append(body, STR(",\"until\":"));
         str_builder_append_u64(body, (uint64_t)blocks[i].until);
-        str_builder_append(body, blocks[i].banned ? STR(",\"banned\":true}") : STR(",\"banned\":false}"));
+        Str const banned = blocks[i].banned ? STR(",\"banned\":true}")
+                                            : STR(",\"banned\":false}");
+        str_builder_append(body, banned);
     }
     str_builder_append(body, STR("],\"report\":"));
     Db_Status const status = db_login_report_json(&w->db, body);
@@ -995,7 +1080,7 @@ static void api_login_report(Worker *w, Conn *c, Request const *r) {
         respond_db_error(c, status);
         return;
     }
-    respond_built(c, 200, JSON_TYPE, &body, r->head_only, NO_STORE);
+    respond_json(c, 200, &body, r->head_only, NO_STORE);
 }
 
 // DELETE /api/login-blocks/{client id} (auth): lifts an address's wait or ban.
@@ -1016,7 +1101,8 @@ static void api_login_unblock(Worker *w, Conn *c, Request const *r, int64_t id) 
     if (ip_parse(str_builder_str(&ip_text), &ip)) {
         login_guard_clear(&LOGIN_GUARD, &ip);
     }
-    fprintf(stderr, "login: an admin lifted the block of %.*s\n", STR_ARG(str_builder_str(&ip_text)));
+    fprintf(stderr, "login: an admin lifted the block of %.*s\n",
+            STR_ARG(str_builder_str(&ip_text)));
     respond_id(c, 200, id);
 }
 
@@ -1033,7 +1119,7 @@ static void api_session(Conn *c, Request const *r) {
     str_builder_append(&body, STR("\",\"expires_at\":"));
     str_builder_append_u64(&body, (uint64_t)claims.expires_at);
     str_builder_append(&body, STR("}"));
-    respond_built(c, 200, JSON_TYPE, &body, r->head_only, NO_STORE);
+    respond_json(c, 200, &body, r->head_only, NO_STORE);
 }
 
 /**
@@ -1076,7 +1162,7 @@ static void api_list(Worker *w, Conn *c, Request const *r, Resource const *res) 
         respond_db_error(c, status);
         return;
     }
-    respond_built(c, 200, JSON_TYPE, &body, r->head_only, NO_STORE);
+    respond_json(c, 200, &body, r->head_only, NO_STORE);
 }
 
 static void api_get(Worker *w, Conn *c, Request const *r, Resource const *res, int64_t id) {
@@ -1094,7 +1180,7 @@ static void api_get(Worker *w, Conn *c, Request const *r, Resource const *res, i
         respond_db_error(c, status);
         return;
     }
-    respond_built(c, 200, JSON_TYPE, &body, r->head_only, NO_STORE);
+    respond_json(c, 200, &body, r->head_only, NO_STORE);
 }
 
 static void api_create(Worker *w, Conn *c, Request const *r, Resource const *res) {
@@ -1223,13 +1309,15 @@ static void api_upload_image(Worker *w, Conn *c, Request const *r) {
     }
     Str extension = image_extension(r->body);
     if (extension.len == 0) {
-        respond_json_error(c, 415, STR("only JPEG, PNG, GIF and WebP images are accepted"), NO_STORE);
+        respond_json_error(c, 415, STR("only JPEG, PNG, GIF and WebP images are accepted"),
+                           NO_STORE);
         return;
     }
 
     int64_t id;
-    Db_Status status = db_create_image(&w->db, extension, clean_original_name(r->headers->file_name),
-                                       (int64_t)r->body.len, &id);
+    Str const original_name = clean_original_name(r->headers->file_name);
+    Db_Status status = db_create_image(&w->db, extension, original_name, (int64_t)r->body.len,
+                                       &id);
     if (status != DB_OK) {
         respond_db_error(c, status);
         return;
@@ -1256,7 +1344,7 @@ static void api_upload_image(Worker *w, Conn *c, Request const *r) {
     str_builder_append(&body, STR(",\"url\":\"/uploads/"));
     str_builder_append(&body, str_builder_str(&file_name));
     str_builder_append(&body, STR("\"}"));
-    respond_built(c, 201, JSON_TYPE, &body, false, NO_STORE);
+    respond_json(c, 201, &body, false, NO_STORE);
 }
 
 static void api_list_images(Worker *w, Conn *c, Request const *r) {
@@ -1277,7 +1365,7 @@ static void api_list_images(Worker *w, Conn *c, Request const *r) {
         respond_db_error(c, status);
         return;
     }
-    respond_built(c, 200, JSON_TYPE, &body, r->head_only, NO_STORE);
+    respond_json(c, 200, &body, r->head_only, NO_STORE);
 }
 
 static void api_delete_image(Worker *w, Conn *c, Request const *r, int64_t id) {
@@ -1314,7 +1402,7 @@ static bool handle_images(Worker *w, Conn *c, Request const *r) {
         } else if (str_eq(r->method, STR("POST"))) {
             api_upload_image(w, c, r);
         } else {
-            respond_method_not_allowed(c, STR("Cache-Control: no-store\r\nAllow: GET, HEAD, POST\r\n"));
+            respond_method_not_allowed(c, ALLOW_GET_HEAD_POST);
         }
         return true;
     }
@@ -1328,7 +1416,7 @@ static bool handle_images(Worker *w, Conn *c, Request const *r) {
     } else if (str_eq(r->method, STR("DELETE"))) {
         api_delete_image(w, c, r, (int64_t)id);
     } else {
-        respond_method_not_allowed(c, STR("Cache-Control: no-store\r\nAllow: DELETE\r\n"));
+        respond_method_not_allowed(c, ALLOW_DELETE);
     }
     return true;
 }
@@ -1350,7 +1438,7 @@ static bool handle_resource(Worker *w, Conn *c, Request const *r, Resource const
         } else if (is_post) {
             api_create(w, c, r, res);
         } else {
-            respond_method_not_allowed(c, STR("Cache-Control: no-store\r\nAllow: GET, HEAD, POST\r\n"));
+            respond_method_not_allowed(c, ALLOW_GET_HEAD_POST);
         }
         return true;
     }
@@ -1369,7 +1457,7 @@ static bool handle_resource(Worker *w, Conn *c, Request const *r, Resource const
     } else if (is_delete) {
         api_delete(w, c, r, res, (int64_t)id);
     } else {
-        respond_method_not_allowed(c, STR("Cache-Control: no-store\r\nAllow: GET, HEAD, PUT, DELETE\r\n"));
+        respond_method_not_allowed(c, ALLOW_GET_HEAD_PUT_DELETE);
     }
     return true;
 }
@@ -1388,7 +1476,7 @@ static void api_get_recipe_by_slug(Worker *w, Conn *c, Request const *r, Str slu
         respond_db_error(c, status);
         return;
     }
-    respond_built(c, 200, JSON_TYPE, &body, r->head_only, NO_STORE);
+    respond_json(c, 200, &body, r->head_only, NO_STORE);
 }
 
 /**
@@ -1412,7 +1500,8 @@ static void api_get_recipe_by_slug(Worker *w, Conn *c, Request const *r, Str slu
  *   PUT    /api/categories/{id}   (auth) {name} -> {id}, or 409 if the name is taken
  *   DELETE /api/categories/{id}   (auth) -> {id}, or 409 while recipes use it
  *
- *   GET    /api/images            (auth) -> [{id, url, original_name, size, created_at, used, recipes}, ...]
+ *   GET    /api/images            (auth) -> [{id, url, original_name, size, created_at, used,
+ *                                 recipes}, ...]
  *   POST   /api/images            (auth) raw JPEG/PNG/GIF/WebP body, X-File-Name -> 201 {id, url}
  *   DELETE /api/images/{id}       (auth) -> {id}, or 409 while a recipe shows it
  *
@@ -1429,7 +1518,7 @@ static void handle_api(Worker *w, Conn *c, Request const *r) {
         if (str_eq(r->method, STR("POST"))) {
             api_login(w, c, r);
         } else {
-            respond_method_not_allowed(c, STR("Cache-Control: no-store\r\nAllow: POST\r\n"));
+            respond_method_not_allowed(c, ALLOW_POST);
         }
         return;
     }
@@ -1437,7 +1526,7 @@ static void handle_api(Worker *w, Conn *c, Request const *r) {
         if (str_eq(r->method, STR("GET")) || r->head_only) {
             api_session(c, r);
         } else {
-            respond_method_not_allowed(c, STR("Cache-Control: no-store\r\nAllow: GET, HEAD\r\n"));
+            respond_method_not_allowed(c, ALLOW_GET_HEAD);
         }
         return;
     }
@@ -1445,19 +1534,20 @@ static void handle_api(Worker *w, Conn *c, Request const *r) {
         if (str_eq(r->method, STR("GET")) || r->head_only) {
             api_login_report(w, c, r);
         } else {
-            respond_method_not_allowed(c, STR("Cache-Control: no-store\r\nAllow: GET, HEAD\r\n"));
+            respond_method_not_allowed(c, ALLOW_GET_HEAD);
         }
         return;
     }
     Str login_blocks = STR("/api/login-blocks/");
     if (str_starts_with(r->path, login_blocks)) {
         uint64_t id;
-        if (!str_to_u64(str_slice(r->path, login_blocks.len, r->path.len), &id) || id == 0 || id > INT64_MAX) {
+        Str const id_text = str_slice(r->path, login_blocks.len, r->path.len);
+        if (!str_to_u64(id_text, &id) || id == 0 || id > INT64_MAX) {
             respond_db_error(c, DB_NOT_FOUND);
         } else if (str_eq(r->method, STR("DELETE"))) {
             api_login_unblock(w, c, r, (int64_t)id);
         } else {
-            respond_method_not_allowed(c, STR("Cache-Control: no-store\r\nAllow: DELETE\r\n"));
+            respond_method_not_allowed(c, ALLOW_DELETE);
         }
         return;
     }
@@ -1466,7 +1556,7 @@ static void handle_api(Worker *w, Conn *c, Request const *r) {
         if (str_eq(r->method, STR("GET")) || r->head_only) {
             api_get_recipe_by_slug(w, c, r, str_slice(r->path, by_slug.len, r->path.len));
         } else {
-            respond_method_not_allowed(c, STR("Cache-Control: no-store\r\nAllow: GET, HEAD\r\n"));
+            respond_method_not_allowed(c, ALLOW_GET_HEAD);
         }
         return;
     }
@@ -1484,21 +1574,112 @@ static void handle_api(Worker *w, Conn *c, Request const *r) {
 // Routing.
 
 /**
- * Returns 1 and fills the response if a full request (head and body) is
- * buffered, else 0.
+ * Moves a request whose body does not fit the connection's own buffer into a
+ * large buffer, which only signed-in users may tie up; or refuses it.
+ *
+ * @return 0 when the request now waits in a large buffer for the rest of its
+ *         body, otherwise head_len: an error was answered and the request is done.
  */
-static int build_response(Worker *w, Conn *c) {
-    Str buffered = str_make((char const *)c->in, c->req_len);
-    Str head;
-    Str after_head;
-    if (!str_split_once(buffered, STR("\r\n\r\n"), &head, &after_head)) {
-        return 0;
+static size_t take_large_body(Worker *w, Conn *c, Request_Headers const *h, size_t head_len) {
+    if (c->in == c->big || h->content_length > BIG_BUF_SIZE - head_len) {
+        respond_error(c, 413, false);
+        return head_len;
     }
-    size_t head_len = buffered.len - after_head.len;
-    size_t consumed = head_len;
+    if (!authenticate_headers(h, NULL)) {
+        respond_unauthorized(c);
+        return head_len;
+    }
+    if (!big_acquire(w, c)) {
+        respond_json_error(c, 503, STR("server busy, try again"),
+                           STR("Cache-Control: no-store\r\nRetry-After: 2\r\n"));
+        return head_len;
+    }
+    memcpy(c->big, c->in, c->req_len);
+    c->in = c->big;
+    c->in_cap = BIG_BUF_SIZE;
+    return 0;  // Wait for the rest of the body.
+}
 
-    c->keepalive = 0;  // Errors below close.
+/**
+ * Answers a whole request, by its path.
+ */
+static void route_request(Worker *w, Conn *c, Request const *r) {
+    /*
+     * No percent-decoding: reject anything that could escape the root. An
+     * empty segment ("//") is refused too: with the leading "/" dropped, the
+     * path "//etc/passwd" would be the absolute path "/etc/passwd". Files are
+     * also opened with open_beneath(), which keeps them inside the root even if
+     * a path got past this check. The set below is length-based, so it
+     * includes the NUL byte too.
+     */
+    if (r->path.len == 0 || r->path.data[0] != '/' || r->path.len >= MAX_PATH_LEN - 16 ||
+        str_find_any(r->path, STR("%\\\0")) != STR_NPOS || str_contains(r->path, STR("..")) ||
+        str_contains(r->path, STR("//"))) {
+        respond_error(c, 400, r->head_only);
+        return;
+    }
 
+    if (str_starts_with(r->path, STR("/api/"))) {
+        handle_api(w, c, r);
+        return;
+    }
+
+    if (!str_eq(r->method, STR("GET")) && !r->head_only) {
+        respond_error(c, 405, false);
+        return;
+    }
+
+    /*
+     * Recipe pages, /reseptit/<slug>: one page shows every recipe and loads it
+     * by the slug in its address. An unknown slug still gets the page (which
+     * says so), but with status 404.
+     */
+    Str const recipes_prefix = STR("/reseptit/");
+    if (str_starts_with(r->path, recipes_prefix)) {
+        Str const slug = str_slice(r->path, recipes_prefix.len, r->path.len);
+        bool exists = false;
+        if (slug.len > 0 && str_find_char(slug, '/') == STR_NPOS &&
+            db_recipe_slug_exists(&w->db, slug, &exists) != DB_OK) {
+            exists = true;  // The page reports any database trouble itself.
+        }
+        serve_file(c, exists ? 200 : 404, STR("resepti.html"), r->head_only, false);
+        return;
+    }
+
+    if (str_starts_with(r->path, STR("/uploads/"))) {
+        serve_upload(c, str_slice(r->path, 9, r->path.len), r->head_only);
+        return;
+    }
+
+    if (str_eq(r->path, STR("/health"))) {
+        Reply const reply = make_reply(200, STR("text/plain; charset=utf-8"), r->head_only,
+                                       STR(""));
+        respond_simple(c, &reply, STR("ok\n"));
+        return;
+    }
+
+    Str const rel = str_slice(r->path, 1, r->path.len);  // Drop leading '/'.
+    char path_buf[MAX_PATH_LEN];
+    Str_Builder path;
+    str_builder_init(&path, path_buf, sizeof path_buf);
+    str_builder_append(&path, rel);
+    if (rel.len == 0 || str_ends_with(rel, STR("/"))) {
+        str_builder_append(&path, STR("index.html"));
+    }
+
+    serve_file(c, 200, str_builder_str(&path), r->head_only, rel.len == 0);
+}
+
+/**
+ * Reads the request whose head is buffered, and answers it when its body has
+ * arrived as well.
+ *
+ * @param head The request line and headers, without the blank line after them.
+ * @param head_len Length of the head with the blank line, in bytes.
+ * @return How many buffered bytes the request used, or 0 when it is not complete yet.
+ */
+static size_t handle_request(Worker *w, Conn *c, Str head, size_t head_len) {
+    Str const buffered = str_make((char const *)c->in, c->req_len);
     Str request_line = head;
     Str headers = STR("");
     str_split_once(head, STR("\r\n"), &request_line, &headers);
@@ -1510,14 +1691,14 @@ static int build_response(Worker *w, Conn *c) {
     if (!str_split_once(request_line, STR(" "), &method, &after_method) ||
         !str_split_once(after_method, STR(" "), &target, &version)) {
         respond_error(c, 400, false);
-        goto done;
+        return head_len;
     }
 
-    bool http11 = str_eq(version, STR("HTTP/1.1"));
-    bool http10 = str_eq(version, STR("HTTP/1.0"));
+    bool const http11 = str_eq(version, STR("HTTP/1.1"));
+    bool const http10 = str_eq(version, STR("HTTP/1.0"));
     if (!http11 && !http10) {
         respond_error(c, 505, false);
-        goto done;
+        return head_len;
     }
 
     Request_Headers h = {
@@ -1534,40 +1715,19 @@ static int build_response(Worker *w, Conn *c) {
     scan_headers(headers, &h);
     if (h.bad_content_length) {
         respond_error(c, 400, false);
-        goto done;
+        return head_len;
     }
     if (h.chunked) {
         respond_error(c, 411, false);
-        goto done;
+        return head_len;
     }
     if (h.content_length > c->in_cap - head_len) {
-        /*
-         * The body does not fit the connection's own buffer. Move the request
-         * into a large buffer, which only signed-in users may tie up.
-         */
-        if (c->in == c->big || h.content_length > BIG_BUF_SIZE - head_len) {
-            respond_error(c, 413, false);
-            goto done;
-        }
-        if (!authenticate_headers(&h, NULL)) {
-            respond_unauthorized(c);
-            goto done;
-        }
-        if (!big_acquire(w, c)) {
-            respond_json_error(c, 503, STR("server busy, try again"),
-                               STR("Cache-Control: no-store\r\nRetry-After: 2\r\n"));
-            goto done;
-        }
-        memcpy(c->big, c->in, c->req_len);
-        c->in = c->big;
-        c->in_cap = BIG_BUF_SIZE;
-        return 0;  // Wait for the rest of the body.
+        return take_large_body(w, c, &h, head_len);
     }
-    size_t request_len = head_len + (size_t)h.content_length;
+    size_t const request_len = head_len + (size_t)h.content_length;
     if (buffered.len < request_len) {
         return 0;  // Wait for the rest of the body.
     }
-    consumed = request_len;
     // After a large body the connection closes, so the large buffer is free at once.
     c->keepalive = (http11 ? !h.close : h.keepalive) && c->in != c->big;
 
@@ -1585,90 +1745,51 @@ static int build_response(Worker *w, Conn *c) {
     }
 
     // Strip query string / fragment.
-    size_t query = str_find_any(r.path, STR("?#"));
+    size_t const query = str_find_any(r.path, STR("?#"));
     if (query != STR_NPOS) {
         r.path = str_slice(r.path, 0, query);
     }
 
-    /*
-     * No percent-decoding: reject anything that could escape the root. An
-     * empty segment ("//") is refused too: with the leading "/" dropped, the
-     * path "//etc/passwd" would be the absolute path "/etc/passwd". Files are
-     * also opened with open_beneath(), which keeps them inside the root even if
-     * a path got past this check. The set below is length-based, so it
-     * includes the NUL byte too.
-     */
-    if (r.path.len == 0 || r.path.data[0] != '/' || r.path.len >= MAX_PATH_LEN - 16 ||
-        str_find_any(r.path, STR("%\\\0")) != STR_NPOS || str_contains(r.path, STR("..")) ||
-        str_contains(r.path, STR("//"))) {
-        respond_error(c, 400, r.head_only);
-        goto done;
+    route_request(w, c, &r);
+    return request_len;
+}
+
+/**
+ * Answers the request at the start of the connection's input when it is
+ * complete: fills the response and removes the request from the input.
+ *
+ * @return False when more bytes are needed first.
+ */
+static bool build_response(Worker *w, Conn *c) {
+    Str const buffered = str_make((char const *)c->in, c->req_len);
+    Str head;
+    Str after_head;
+    if (!str_split_once(buffered, STR("\r\n\r\n"), &head, &after_head)) {
+        return false;
+    }
+    size_t const head_len = buffered.len - after_head.len;
+
+    c->keepalive = false;  // Errors below close.
+    size_t const consumed = handle_request(w, c, head, head_len);
+    if (consumed == 0) {
+        return false;
     }
 
-    if (str_starts_with(r.path, STR("/api/"))) {
-        handle_api(w, c, &r);
-        goto done;
-    }
-
-    if (!str_eq(method, STR("GET")) && !r.head_only) {
-        respond_error(c, 405, false);
-        goto done;
-    }
-
-    /*
-     * Recipe pages, /reseptit/<slug>: one page shows every recipe and loads it
-     * by the slug in its address. An unknown slug still gets the page (which
-     * says so), but with status 404.
-     */
-    Str recipes_prefix = STR("/reseptit/");
-    if (str_starts_with(r.path, recipes_prefix)) {
-        Str slug = str_slice(r.path, recipes_prefix.len, r.path.len);
-        bool exists = false;
-        if (slug.len > 0 && str_find_char(slug, '/') == STR_NPOS &&
-            db_recipe_slug_exists(&w->db, slug, &exists) != DB_OK) {
-            exists = true;  // The page reports any database trouble itself.
-        }
-        serve_file(c, exists ? 200 : 404, STR("resepti.html"), r.head_only, false);
-        goto done;
-    }
-
-    if (str_starts_with(r.path, STR("/uploads/"))) {
-        serve_upload(c, str_slice(r.path, 9, r.path.len), r.head_only);
-        goto done;
-    }
-
-    if (str_eq(r.path, STR("/health"))) {
-        respond_simple(c, 200, STR("text/plain; charset=utf-8"), STR("ok\n"), r.head_only, STR(""));
-        goto done;
-    }
-
-    Str rel = str_slice(r.path, 1, r.path.len);  // Drop leading '/'.
-    char path_buf[MAX_PATH_LEN];
-    Str_Builder path;
-    str_builder_init(&path, path_buf, sizeof path_buf);
-    str_builder_append(&path, rel);
-    if (rel.len == 0 || str_ends_with(rel, STR("/"))) {
-        str_builder_append(&path, STR("index.html"));
-    }
-
-    serve_file(c, 200, str_builder_str(&path), r.head_only, rel.len == 0);
-
-done:
     if (c->big && c->in == c->big) {
         // A large request: the connection closes after the response.
-        c->keepalive = 0;
+        c->keepalive = false;
         c->req_len = 0;
         c->in = c->req;
         c->in_cap = REQ_BUF_SIZE;
         if (c->out != c->big) {
             big_release(w, c);
         }
-        return 1;
+        return true;
     }
     // The request is fully handled; keep any pipelined bytes behind it.
     c->req_len -= (uint32_t)consumed;
     memmove(c->in, c->in + consumed, c->req_len);
-    return 1;
+    return true;
 }
 
 // Connection lifecycle.
@@ -1705,9 +1826,9 @@ static void conn_advance(Worker *w, Conn *c) {
         if (c->state == ST_READING) {
             if (!build_response(w, c)) {
                 if (c->req_len >= c->in_cap) {  // Headers too large.
-                    c->keepalive = 0;
+                    c->keepalive = false;
                     c->req_len = 0;
-                    respond_error(c, 431, 0);
+                    respond_error(c, 431, false);
                 } else {
                     conn_want(w, c, EPOLLIN);
                     return;
@@ -1797,7 +1918,8 @@ static void accept_all(Worker *w, int64_t now) {
     for (int i = 0; i < ACCEPT_BURST; i++) {
         struct sockaddr_in peer;
         socklen_t peer_len = sizeof peer;
-        int fd = accept4(w->listen_fd, (struct sockaddr *)&peer, &peer_len, SOCK_NONBLOCK | SOCK_CLOEXEC);
+        int fd = accept4(w->listen_fd, (struct sockaddr *)&peer, &peer_len,
+                         SOCK_NONBLOCK | SOCK_CLOEXEC);
         if (fd < 0) {
             return;  // EAGAIN or transient error.
         }
@@ -1814,7 +1936,7 @@ static void accept_all(Worker *w, int64_t now) {
 
         c->fd = fd;
         c->state = ST_READING;
-        c->keepalive = 0;
+        c->keepalive = false;
         c->req_len = c->resp_pos = c->resp_end = 0;
         c->file_fd = -1;
         c->in = c->req;
@@ -1907,7 +2029,8 @@ static int make_listener(uint16_t port) {
 }
 
 // Called for each address with recent failures in the database at startup.
-static void restore_login_failures(void *context, Str ip_text, uint32_t failures, int64_t last_failure) {
+static void restore_login_failures(void *context, Str ip_text, uint32_t failures,
+                                   int64_t last_failure) {
     Ip_Address ip;
     if (ip_parse(ip_text, &ip)) {
         login_guard_restore(&LOGIN_GUARD, &ip, failures, last_failure);
@@ -1935,92 +2058,141 @@ static void usage(Str argv0) {
             STR_ARG(argv0));
 }
 
-int main(int argc, char **argv) {
-    int port = 8080;
+/**
+ * What the command line asks for.
+ */
+typedef struct {
+    int        port;
+    /** Worker threads: one per processor unless -t says otherwise. */
+    long       workers;
+    Str        root;
+    Str        db_path;
+    Str        migrations_dir;
+    Str        uploads_dir;
+    Str        geoip_path;
+    Db_Storage db_storage;
+} Settings;
+
+/**
+ * Reads one option that takes an argument.
+ *
+ * @return False when the argument is not valid.
+ */
+static bool apply_option(int opt, Str argument, Settings *settings) {
+    assert(settings != NULL);
+    uint64_t value;
+    switch (opt) {
+    case 'p':
+        if (!str_to_u64(argument, &value) || value > 65535) {
+            return false;
+        }
+        settings->port = (int)value;
+        return true;
+    case 't':
+        if (!str_to_u64(argument, &value) || value > MAX_WORKERS) {
+            return false;
+        }
+        settings->workers = (long)value;
+        return true;
+    case 'r':
+        settings->root = argument;
+        return true;
+    case 'd':
+        settings->db_path = argument;
+        return true;
+    case 'm':
+        settings->migrations_dir = argument;
+        return true;
+    case 'u':
+        settings->uploads_dir = argument;
+        return true;
+    case 'g':
+        settings->geoip_path = argument;
+        return true;
+    case 's':
+        if (str_eq(argument, STR("local"))) {
+            settings->db_storage = DB_STORAGE_LOCAL;
+            return true;
+        }
+        if (str_eq(argument, STR("share"))) {
+            settings->db_storage = DB_STORAGE_SHARE;
+            return true;
+        }
+        return false;
+    default:
+        return false;
+    }
+}
+
+/**
+ * Reads the command line.
+ *
+ * @param settings Receives the settings.
+ * @param status Receives the exit status when the server should not start.
+ * @return True when the server should go on and start.
+ */
+static bool parse_settings(int argc, char **argv, Settings *settings, int *status) {
+    assert(settings != NULL);
+    assert(status != NULL);
     // CHECK What is _SC_NPROCESSORS_ONLN?
-    long nworkers = sysconf(_SC_NPROCESSORS_ONLN);
-    
+    *settings = (Settings) {
+        .port = 8080,
+        .workers = sysconf(_SC_NPROCESSORS_ONLN),
+        .root = STR(""),
+        .db_path = STR("kotoa.db"),
+        .migrations_dir = STR("migrations"),
+        .uploads_dir = STR("uploads"),
+        .geoip_path = STR(""),
+        .db_storage = DB_STORAGE_LOCAL,
+    };
     // getopt() and argv are C strings; the options are kept as Str from here on.
-    Str program = str_from_cstr(argv[0]);
-    Str root = STR("");
-    Str db_path = STR("kotoa.db");
-    Str migrations_dir = STR("migrations");
-    Str uploads_dir = STR("uploads");
-    Str geoip_path = STR("");
-    Db_Storage db_storage = DB_STORAGE_LOCAL;
+    Str const program = str_from_cstr(argv[0]);
     int opt;
     // CHECK What does getopt do?
     while ((opt = getopt(argc, argv, "p:t:r:d:m:u:s:g:h")) != -1) {
-        uint64_t value;
-        switch (opt) {
-        case 'p':
-            if (!str_to_u64(str_from_cstr(optarg), &value) || value > 65535) {
-                usage(program);
-                return EX_USAGE;
-            }
-            port = (int)value;
-            break;
-        case 't':
-            if (!str_to_u64(str_from_cstr(optarg), &value) || value > MAX_WORKERS) {
-                usage(program);
-                return EX_USAGE;
-            }
-            nworkers = (long)value;
-            break;
-        case 'r':
-            root = str_from_cstr(optarg);
-            break;
-        case 'd':
-            db_path = str_from_cstr(optarg);
-            break;
-        case 'm':
-            migrations_dir = str_from_cstr(optarg);
-            break;
-        case 'u':
-            uploads_dir = str_from_cstr(optarg);
-            break;
-        case 'g':
-            geoip_path = str_from_cstr(optarg);
-            break;
-        case 's':
-            if (str_eq(str_from_cstr(optarg), STR("local"))) {
-                db_storage = DB_STORAGE_LOCAL;
-            } else if (str_eq(str_from_cstr(optarg), STR("share"))) {
-                db_storage = DB_STORAGE_SHARE;
-            } else {
-                usage(program);
-                return EX_USAGE;
-            }
-            break;
-        default:
+        if (opt == 'h') {
             usage(program);
-            return opt == 'h' ? EXIT_SUCCESS : EX_USAGE;
+            *status = EXIT_SUCCESS;
+            return false;
+        }
+        if (!apply_option(opt, str_from_cstr(optarg), settings)) {
+            usage(program);
+            *status = EX_USAGE;
+            return false;
         }
     }
-    if (port <= 0 || port > 65535) {
+    if (settings->port <= 0 || settings->port > 65535) {
         usage(program);
-        return EX_USAGE;
+        *status = EX_USAGE;
+        return false;
     }
-    if (nworkers < 1) {
-        nworkers = 1;
+    if (settings->workers < 1) {
+        settings->workers = 1;
     }
-    if (nworkers > MAX_WORKERS) {
-        nworkers = MAX_WORKERS;
+    if (settings->workers > MAX_WORKERS) {
+        settings->workers = MAX_WORKERS;
     }
+    return true;
+}
 
-    if (root.len > 0) {
+/**
+ * Opens the directory of static files and the one of uploaded images. Problems
+ * are warned about; the server then runs without them.
+ */
+static void open_directories(Settings const *settings) {
+    if (settings->root.len > 0) {
         char root_z[MAX_PATH_LEN];  // open() needs a NUL-terminated path.
-        if (str_to_cstr(root, root_z, sizeof root_z)) {
+        if (str_to_cstr(settings->root, root_z, sizeof root_z)) {
             ROOT_FD = open(root_z, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
         }
         if (ROOT_FD < 0) {
             fprintf(stderr, "warning: cannot open docroot '%.*s': %s\n",
-                    STR_ARG(root), strerror(errno));
+                    STR_ARG(settings->root), strerror(errno));
         }
     }
 
     char uploads_z[MAX_PATH_LEN];  // mkdir() and open() need a NUL-terminated path.
-    if (str_to_cstr(uploads_dir, uploads_z, sizeof uploads_z)) {
+    if (str_to_cstr(settings->uploads_dir, uploads_z, sizeof uploads_z)) {
         if (mkdir(uploads_z, 0755) != 0 && errno != EEXIST) {
             fprintf(stderr, "warning: cannot create uploads directory '%s': %s\n",
                     uploads_z, strerror(errno));
@@ -2029,32 +2201,35 @@ int main(int argc, char **argv) {
     }
     if (UPLOADS_FD < 0) {
         fprintf(stderr, "warning: cannot open uploads directory '%.*s'; image uploads are off\n",
-                STR_ARG(uploads_dir));
+                STR_ARG(settings->uploads_dir));
     }
+}
 
-    // The one and only memory reservation.
-    size_t per_worker = arena_align_up(sizeof (Worker), CACHE_LINE)
-                      + arena_align_up(sizeof (struct epoll_event) * EVENT_BATCH, CACHE_LINE)
-                      + sizeof (Conn) * MAX_CONNS_PER_WORKER
-                      + (size_t)MAX_CONNS_PER_WORKER * REQ_BUF_SIZE
-                      + (size_t)MAX_CONNS_PER_WORKER * RESP_BUF_SIZE
-                      + (size_t)BIG_BUFS_PER_WORKER * arena_align_up(BIG_BUF_SIZE, CACHE_LINE);
-    size_t total = arena_align_up(per_worker * (size_t)nworkers + DB_HEAP_SIZE + CACHE_LINE * 8,
-                                  4096);
+/**
+ * The memory the server reserves at startup, in bytes.
+ */
+static size_t reserved_bytes(long workers) {
+    size_t const big_bytes = (size_t)BIG_BUFS_PER_WORKER * arena_align_up(BIG_BUF_SIZE, CACHE_LINE);
+    size_t const per_worker = arena_align_up(sizeof (Worker), CACHE_LINE) +
+                              arena_align_up(sizeof (struct epoll_event) * EVENT_BATCH,
+                                             CACHE_LINE) +
+                              sizeof (Conn) * MAX_CONNS_PER_WORKER +
+                              (size_t)MAX_CONNS_PER_WORKER * REQ_BUF_SIZE +
+                              (size_t)MAX_CONNS_PER_WORKER * RESP_BUF_SIZE +
+                              big_bytes;
+    return arena_align_up(per_worker * (size_t)workers + DB_HEAP_SIZE + (size_t)CACHE_LINE * 8,
+                          PAGE_SIZE);
+}
 
-    void *mem = mmap(NULL, total, PROT_READ | PROT_WRITE,
-                     MAP_PRIVATE | MAP_ANONYMOUS | MAP_POPULATE, -1, 0);
-    if (mem == MAP_FAILED) {
-        perror("mmap");
-        return EX_OSERR;
-    }
-    madvise(mem, total, MADV_HUGEPAGE);  // Best effort.
-
-    Arena arena;
-    arena_init(&arena, mem, total);
-
+/**
+ * Sets up what logins need: the session key, the admin password hash, the
+ * proxy setting, the brute-force protection and the country data.
+ *
+ * @return EXIT_SUCCESS, or the sysexits.h code for what went wrong.
+ */
+static int configure_login(Settings const *settings) {
     // Session tokens survive restarts only when the secret is configured.
-    Str secret = str_from_cstr(getenv("KASIN_JWT_SECRET"));
+    Str const secret = str_from_cstr(getenv("KASIN_JWT_SECRET"));
     if (secret.len > 0) {
         Sha256 key_hash;
         sha256_init(&key_hash);
@@ -2066,7 +2241,7 @@ int main(int argc, char **argv) {
     }
 
     // A missing hash leaves the site running with logins off; a malformed one is a mistake.
-    Str password_hash = str_from_cstr(getenv("KASIN_ADMIN_PASSWORD_HASH"));
+    Str const password_hash = str_from_cstr(getenv("KASIN_ADMIN_PASSWORD_HASH"));
     if (password_hash.len == 0) {
         fprintf(stderr, "warning: KASIN_ADMIN_PASSWORD_HASH is not set, so nobody can log in; "
                         "make one with kasin-passwd (see docs/admin-password.md)\n");
@@ -2081,91 +2256,99 @@ int main(int argc, char **argv) {
     TRUST_PROXY = str_eq(str_from_cstr(getenv("KASIN_TRUST_PROXY")), STR("1"));
     login_guard_init(&LOGIN_GUARD, unix_now());
     char geoip_z[MAX_PATH_LEN];  // open() needs a NUL-terminated path.
-    if (geoip_path.len == 0) {
-        fprintf(stderr, "warning: no country file (-g); login attempts are recorded without countries\n");
-    } else if (!str_to_cstr(geoip_path, geoip_z, sizeof geoip_z) || !geoip_open(&GEOIP, geoip_z)) {
+    if (settings->geoip_path.len == 0) {
+        fprintf(stderr, "warning: no country file (-g); "
+                        "login attempts are recorded without countries\n");
+    } else if (!str_to_cstr(settings->geoip_path, geoip_z, sizeof geoip_z) ||
+               !geoip_open(&GEOIP, geoip_z)) {
         fprintf(stderr, "warning: login attempts are recorded without countries\n");
     }
+    return EXIT_SUCCESS;
+}
 
-    // SQLite gets a fixed heap out of the same reservation.
-    void *db_heap = arena_alloc(&arena, DB_HEAP_SIZE, CACHE_LINE);
-    if (!db_heap) {
+/**
+ * Carves a worker's memory out of the arena and gives it its listening socket,
+ * its epoll instance and its database connection.
+ *
+ * @param out Receives the worker.
+ * @return EXIT_SUCCESS, or the sysexits.h code for what went wrong.
+ */
+static int create_worker(Arena *arena, Settings const *settings, int id, Worker **out) {
+    assert(out != NULL);
+    Worker *w = arena_alloc(arena, sizeof *w, CACHE_LINE);
+    if (!w) {
         fputs("arena exhausted\n", stderr);
         return EX_SOFTWARE;
     }
-    if (!db_global_init(db_heap, DB_HEAP_SIZE) || !db_prepare_file(db_path, db_storage, migrations_dir)) {
+    size_t const request_bytes = (size_t)MAX_CONNS_PER_WORKER * REQ_BUF_SIZE;
+    size_t const response_bytes = (size_t)MAX_CONNS_PER_WORKER * RESP_BUF_SIZE;
+    w->events = arena_alloc(arena, sizeof (struct epoll_event) * EVENT_BATCH, CACHE_LINE);
+    w->conns = arena_alloc(arena, sizeof (Conn) * MAX_CONNS_PER_WORKER, CACHE_LINE);
+    uint8_t *reqs = arena_alloc(arena, request_bytes, CACHE_LINE);
+    uint8_t *resps = arena_alloc(arena, response_bytes, CACHE_LINE);
+    if (!w->events || !w->conns || !reqs || !resps) {
+        fputs("arena exhausted\n", stderr);
         return EX_SOFTWARE;
     }
-
-    Worker *workers[MAX_WORKERS];
-    for (long i = 0; i < nworkers; i++) {
-        Worker *w = arena_alloc(&arena, sizeof *w, CACHE_LINE);
-        if (!w) {
+    w->big_free_count = 0;
+    for (int j = 0; j < BIG_BUFS_PER_WORKER; j++) {
+        uint8_t *big = arena_alloc(arena, BIG_BUF_SIZE, CACHE_LINE);
+        if (!big) {
             fputs("arena exhausted\n", stderr);
             return EX_SOFTWARE;
         }
-        w->events = arena_alloc(&arena, sizeof (struct epoll_event) * EVENT_BATCH, CACHE_LINE);
-        w->conns = arena_alloc(&arena, sizeof (Conn) * MAX_CONNS_PER_WORKER, CACHE_LINE);
-        uint8_t *reqs = arena_alloc(&arena, (size_t)MAX_CONNS_PER_WORKER * REQ_BUF_SIZE, CACHE_LINE);
-        uint8_t *resps = arena_alloc(&arena, (size_t)MAX_CONNS_PER_WORKER * RESP_BUF_SIZE, CACHE_LINE);
-        if (!w->events || !w->conns || !reqs || !resps) {
-            fputs("arena exhausted\n", stderr);
-            return EX_SOFTWARE;
-        }
-        w->big_free_count = 0;
-        for (int j = 0; j < BIG_BUFS_PER_WORKER; j++) {
-            uint8_t *big = arena_alloc(&arena, BIG_BUF_SIZE, CACHE_LINE);
-            if (!big) {
-                fputs("arena exhausted\n", stderr);
-                return EX_SOFTWARE;
-            }
-            w->big_free[w->big_free_count++] = big;
-        }
-
-        w->id = (int)i;
-        w->free_list = NULL;
-        for (int j = MAX_CONNS_PER_WORKER - 1; j >= 0; j--) {  // Build free list.
-            Conn *c = &w->conns[j];
-            c->fd = -1;
-            c->req = reqs + (size_t)j * REQ_BUF_SIZE;
-            c->resp = resps + (size_t)j * RESP_BUF_SIZE;
-            c->next_free = w->free_list;
-            w->free_list = c;
-        }
-
-        w->listen_fd = make_listener((uint16_t)port);
-        if (w->listen_fd < 0) {
-            perror("listen");
-            return EX_OSERR;
-        }
-        w->epfd = epoll_create1(EPOLL_CLOEXEC);
-        if (w->epfd < 0) {
-            perror("epoll_create1");
-            return EX_OSERR;
-        }
-        struct epoll_event ev = {
-            .events = EPOLLIN,
-            .data.ptr = NULL,
-        };
-        if (epoll_ctl(w->epfd, EPOLL_CTL_ADD, w->listen_fd, &ev) < 0) {
-            perror("epoll_ctl");
-            return EX_OSERR;
-        }
-        if (!db_open(&w->db, db_path, db_storage)) {
-            return EX_SOFTWARE;
-        }
-        workers[i] = w;
+        w->big_free[w->big_free_count++] = big;
     }
 
-    // Waits and bans from before a restart still apply.
+    w->id = id;
+    w->free_list = NULL;
+    for (int j = MAX_CONNS_PER_WORKER - 1; j >= 0; j--) {  // Build free list.
+        Conn *c = &w->conns[j];
+        c->fd = -1;
+        c->req = reqs + (size_t)j * REQ_BUF_SIZE;
+        c->resp = resps + (size_t)j * RESP_BUF_SIZE;
+        c->next_free = w->free_list;
+        w->free_list = c;
+    }
+
+    w->listen_fd = make_listener((uint16_t)settings->port);
+    if (w->listen_fd < 0) {
+        perror("listen");
+        return EX_OSERR;
+    }
+    w->epfd = epoll_create1(EPOLL_CLOEXEC);
+    if (w->epfd < 0) {
+        perror("epoll_create1");
+        return EX_OSERR;
+    }
+    struct epoll_event ev = {
+        .events = EPOLLIN,
+        .data.ptr = NULL,
+    };
+    if (epoll_ctl(w->epfd, EPOLL_CTL_ADD, w->listen_fd, &ev) < 0) {
+        perror("epoll_ctl");
+        return EX_OSERR;
+    }
+    if (!db_open(&w->db, settings->db_path, settings->db_storage)) {
+        return EX_SOFTWARE;
+    }
+    *out = w;
+    return EXIT_SUCCESS;
+}
+
+// Waits and bans from before a restart still apply.
+static void restore_login_state(Worker *w) {
     size_t restored = 0;
-    if (db_recent_login_failures(&workers[0]->db, unix_now() - LOGIN_WINDOW_SEC, restore_login_failures,
+    if (db_recent_login_failures(&w->db, unix_now() - LOGIN_WINDOW_SEC, restore_login_failures,
                                  &restored) != DB_OK) {
         fprintf(stderr, "warning: could not read recent failed logins from the database\n");
     } else if (restored > 0) {
-        fprintf(stderr, "login: restored recent failures of %zu address%s\n", restored, restored == 1 ? "" : "es");
+        fprintf(stderr, "login: restored recent failures of %zu address%s\n", restored,
+                restored == 1 ? "" : "es");
     }
+}
 
+static void install_signal_handlers(void) {
     // No SA_RESTART so signals wake epoll_wait.
     struct sigaction sa = {
         .sa_handler = on_signal,
@@ -2174,35 +2357,95 @@ int main(int argc, char **argv) {
     sigaction(SIGINT, &sa, NULL);
     sigaction(SIGTERM, &sa, NULL);
     signal(SIGPIPE, SIG_IGN);
+}
 
+static void print_banner(Settings const *settings, size_t reserved) {
     printf("kasin-httpd: port %d, %ld workers, %d conns/worker, req %d B, resp %d B, "
            "reserved %.1f MiB (SQLite heap %d MiB, %d x %d KiB large buffers per worker), "
            "docroot %.*s, database %.*s, uploads %.*s, client address from %s\n",
-           port, nworkers, MAX_CONNS_PER_WORKER, REQ_BUF_SIZE, RESP_BUF_SIZE,
-           (double)total / (1024.0 * 1024.0), DB_HEAP_SIZE / (1024 * 1024),
+           settings->port, settings->workers, MAX_CONNS_PER_WORKER, REQ_BUF_SIZE, RESP_BUF_SIZE,
+           (double)reserved / (1024.0 * 1024.0), DB_HEAP_SIZE / (1024 * 1024),
            BIG_BUFS_PER_WORKER, BIG_BUF_SIZE / 1024,
-           STR_ARG(root.len > 0 ? root : STR("(none)")), STR_ARG(db_path), STR_ARG(uploads_dir),
+           STR_ARG(settings->root.len > 0 ? settings->root : STR("(none)")),
+           STR_ARG(settings->db_path), STR_ARG(settings->uploads_dir),
            TRUST_PROXY ? "X-Forwarded-For" : "the connection");
     fflush(stdout);
+}
 
-    long const worker_count = nworkers;
-    for (long i = 1; i < nworkers; i++) {
+/**
+ * Runs the workers until a signal asks the server to stop, then closes their
+ * databases. Worker 0 runs on the calling thread.
+ */
+static void run_workers(Worker *const *workers, long count) {
+    long started = count;
+    for (long i = 1; i < count; i++) {
         if (pthread_create(&workers[i]->thread, NULL, worker_main, workers[i]) != 0) {
             perror("pthread_create");
             STOP_REQUESTED = 1;
-            nworkers = i;
+            started = i;
             break;
         }
     }
 
-    worker_main(workers[0]);  // Main thread is worker 0.
+    worker_main(workers[0]);
 
-    for (long i = 1; i < nworkers; i++) {
+    for (long i = 1; i < started; i++) {
         pthread_join(workers[i]->thread, NULL);
     }
-    for (long i = 0; i < worker_count; i++) {
+    for (long i = 0; i < count; i++) {
         db_close(&workers[i]->db);
     }
+}
+
+int main(int argc, char **argv) {
+    Settings settings;
+    int status;
+    if (!parse_settings(argc, argv, &settings, &status)) {
+        return status;
+    }
+    open_directories(&settings);
+
+    // The one and only memory reservation.
+    size_t const total = reserved_bytes(settings.workers);
+    void *mem = mmap(NULL, total, PROT_READ | PROT_WRITE,
+                     MAP_PRIVATE | MAP_ANONYMOUS | MAP_POPULATE, -1, 0);
+    if (mem == MAP_FAILED) {
+        perror("mmap");
+        return EX_OSERR;
+    }
+    madvise(mem, total, MADV_HUGEPAGE);  // Best effort.
+
+    Arena arena;
+    arena_init(&arena, mem, total);
+
+    status = configure_login(&settings);
+    if (status != EXIT_SUCCESS) {
+        return status;
+    }
+
+    // SQLite gets a fixed heap out of the same reservation.
+    void *db_heap = arena_alloc(&arena, DB_HEAP_SIZE, CACHE_LINE);
+    if (!db_heap) {
+        fputs("arena exhausted\n", stderr);
+        return EX_SOFTWARE;
+    }
+    if (!db_global_init(db_heap, DB_HEAP_SIZE) ||
+        !db_prepare_file(settings.db_path, settings.db_storage, settings.migrations_dir)) {
+        return EX_SOFTWARE;
+    }
+
+    Worker *workers[MAX_WORKERS];
+    for (long i = 0; i < settings.workers; i++) {
+        status = create_worker(&arena, &settings, (int)i, &workers[i]);
+        if (status != EXIT_SUCCESS) {
+            return status;
+        }
+    }
+
+    restore_login_state(workers[0]);
+    install_signal_handlers();
+    print_banner(&settings, total);
+    run_workers(workers, settings.workers);
     puts("kasin-httpd: shut down");
     return EXIT_SUCCESS;
 }

@@ -1,10 +1,13 @@
 #include "arena.h"
 
+#include <assert.h>
+
 size_t arena_align_up(size_t value, size_t align) {
     return (value + align - 1) & ~(align - 1);
 }
 
 void arena_init(Arena *arena, void *base, size_t capacity) {
+    assert(arena != NULL);
     arena->base = base;
     arena->capacity = capacity;
     arena->used = 0;

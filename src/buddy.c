@@ -9,20 +9,21 @@
  */
 struct Buddy_Header {
     uint32_t      order;
-    uint32_t      is_free;
+    bool          is_free;
     Buddy_Header *next;
     Buddy_Header *prev;
     uint64_t      padding;  // Keeps payloads 16-byte aligned.
 };
 
-static_assert (sizeof (Buddy_Header) == 32, "header must keep payload aligned");
-static_assert (BUDDY_MIN_BLOCK > sizeof (Buddy_Header), "minimum block too small");
+static_assert(sizeof (Buddy_Header) == 32, "header must keep payload aligned");
+static_assert(BUDDY_MIN_BLOCK > sizeof (Buddy_Header), "minimum block too small");
 
 static size_t block_size(uint32_t order) {
     return (size_t)BUDDY_MIN_BLOCK << order;
 }
 
 static bool order_for(Buddy_Heap const *heap, size_t size, uint32_t *order) {
+    assert(order != NULL);
     if (size > heap->size - sizeof (Buddy_Header)) {
         return false;
     }
@@ -37,7 +38,7 @@ static bool order_for(Buddy_Heap const *heap, size_t size, uint32_t *order) {
 
 static void list_push(Buddy_Heap *heap, Buddy_Header *block) {
     Buddy_Header *head = heap->free_lists[block->order];
-    block->is_free = 1;
+    block->is_free = true;
     block->prev = NULL;
     block->next = head;
     if (head) {
@@ -55,10 +56,12 @@ static void list_remove(Buddy_Heap *heap, Buddy_Header *block) {
     if (block->next) {
         block->next->prev = block->prev;
     }
-    block->is_free = 0;
+    block->is_free = false;
 }
 
 bool buddy_init(Buddy_Heap *heap, void *base, size_t size) {
+    assert(heap != NULL);
+    assert(base != NULL);
     uint32_t max_order = 0;
     while (max_order + 1 < BUDDY_MAX_ORDERS && block_size(max_order) < size) {
         max_order++;

@@ -1,6 +1,7 @@
 #include "ip.h"
 
 #include <arpa/inet.h>
+#include <assert.h>
 #include <string.h>
 
 // ::ffff:0:0/96, the prefix of IPv4-mapped addresses.
@@ -27,6 +28,7 @@ Ip_Address ip_from_v4(uint8_t const bytes[4]) {
 }
 
 bool ip_parse(Str text, Ip_Address *out) {
+    assert(out != NULL);
     char buf[IP_TEXT_SIZE];  // inet_pton() needs a NUL-terminated string.
     if (!str_to_cstr(text, buf, sizeof buf)) {
         return false;
@@ -44,9 +46,12 @@ bool ip_is_v4(Ip_Address const *ip) {
 }
 
 void ip_format(Ip_Address const *ip, Str_Builder *out) {
+    assert(out != NULL);
     char buf[IP_TEXT_SIZE];
     bool const v4 = ip_is_v4(ip);
-    if (inet_ntop(v4 ? AF_INET : AF_INET6, v4 ? ip->bytes + 12 : ip->bytes, buf, sizeof buf) == NULL) {
+    int const family = v4 ? AF_INET : AF_INET6;
+    void const *bytes = v4 ? ip->bytes + 12 : ip->bytes;
+    if (inet_ntop(family, bytes, buf, sizeof buf) == NULL) {
         str_builder_append(out, STR("?"));
         return;
     }
@@ -58,6 +63,7 @@ bool ip_eq(Ip_Address const *a, Ip_Address const *b) {
 }
 
 bool ip_from_forwarded_for(Str header, Ip_Address *out) {
+    assert(out != NULL);
     size_t const comma = str_rfind_char(header, ',');
     Str const last = comma == STR_NPOS ? header : str_slice(header, comma + 1, header.len);
     return ip_parse(str_trim(last), out);

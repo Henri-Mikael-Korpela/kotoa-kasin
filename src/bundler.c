@@ -1,5 +1,6 @@
 #include "bundler.h"
 
+#include <assert.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <getopt.h>
@@ -13,19 +14,44 @@
 #include <time.h>
 #include <unistd.h>
 
-#define MEMORY_SIZE      (64u * 1024 * 1024)
-#define MAX_FILE_SIZE    (4u * 1024 * 1024)
-#define MAX_BUNDLES      16
-#define PATH_CAPACITY    4096
-#define OUTPUT_OVERHEAD  4096  // Header comment, wrapper and separators.
-#define WATCH_POLL_MS    300
-#define HASH_START       14695981039346656037ull
+enum {
+    /** Memory the tool reserves at startup, in bytes. */
+    MEMORY_SIZE = 64 * 1024 * 1024,
+    /** Largest file the tool reads, in bytes. */
+    MAX_FILE_SIZE = 4 * 1024 * 1024,
+    /** Most bundles in one manifest. */
+    MAX_BUNDLES = 16,
+    /** Longest path the tool builds, with its terminator, in bytes. */
+    PATH_CAPACITY = 4096,
+    /** Room in a bundle for its header comment, wrapper and separators, in bytes. */
+    OUTPUT_OVERHEAD = 4096,
+    /** How often watch mode looks at the files, in milliseconds. */
+    WATCH_POLL_MS = 300,
+};
+
+/** The FNV-1a offset basis, the start value of the hash of the files' state. */
+static uint64_t const HASH_START = 14695981039346656037ull;
 
 typedef struct {
     Bundle bundles[MAX_BUNDLES];
     size_t count;
 } Manifest;
 
+/**
+ * Everything a build needs, so that its functions take few parameters.
+ */
+typedef struct {
+    Bundle_Kind const *kind;
+    Arena             *arena;
+    /** Arena use below which the manifest lives; every build starts at this mark. */
+    size_t             base;
+    Manifest          *manifest;
+    char const        *manifest_path;
+    Str                out_dir;
+    bool               minify;
+} Bundler;
+
+/** The directory of sources every bundle may use. */
 static Str const SHARED_DIR = STR_INIT("shared");
 
 static void usage(Bundle_Kind const *kind) {
@@ -41,6 +67,7 @@ static void usage(Bundle_Kind const *kind) {
  * Joins a directory and a relative path into a NUL-terminated path for the OS.
  */
 static bool join_path(Str dir, Str relative, Str suffix, char *buf, size_t capacity) {
+    assert(buf != NULL);
     Str_Builder b;
     str_builder_init(&b, buf, capacity);
     if (dir.len > 0) {
@@ -61,6 +88,7 @@ static Str directory_of(Str path) {
  * Reads a whole file into the arena.
  */
 static bool read_file(Arena *arena, char const *path, Str *contents) {
+    assert(contents != NULL);
     int const fd = open(path, O_RDONLY | O_CLOEXEC);
     if (fd < 0) {
         fprintf(stderr, "%s: %s\n", path, strerror(errno));
@@ -68,7 +96,7 @@ static bool read_file(Arena *arena, char const *path, Str *contents) {
     }
     struct stat st;
     if (fstat(fd, &st) != 0 || !S_ISREG(st.st_mode) || st.st_size > (off_t)MAX_FILE_SIZE) {
-        fprintf(stderr, "%s: not a regular file of at most %u bytes\n", path, MAX_FILE_SIZE);
+        fprintf(stderr, "%s: not a regular file of at most %d bytes\n", path, MAX_FILE_SIZE);
         close(fd);
         return false;
     }
@@ -86,7 +114,8 @@ static bool read_file(Arena *arena, char const *path, Str *contents) {
             continue;
         }
         if (n <= 0) {
-            fprintf(stderr, "%s: %s\n", path, n < 0 ? strerror(errno) : "file shrank while reading");
+            char const *reason = n < 0 ? strerror(errno) : "file shrank while reading";
+            fprintf(stderr, "%s: %s\n", path, reason);
             close(fd);
             return false;
         }
@@ -101,6 +130,7 @@ static bool read_file(Arena *arena, char const *path, Str *contents) {
  * Writes a file through a temporary name, so a reader never sees half of it.
  */
 static bool write_file(char const *path, Str contents) {
+    assert(path != NULL);
     char tmp[PATH_CAPACITY];
     if (!join_path(STR(""), str_from_cstr(path), STR(".tmp"), tmp, sizeof tmp)) {
         fprintf(stderr, "%s: path too long\n", path);
@@ -180,7 +210,9 @@ static bool manifest_error(char const *path, size_t line, char const *message, S
     return false;
 }
 
-static bool parse_manifest(Bundle_Kind const *kind, char const *path, Str text, Manifest *manifest) {
+static bool parse_manifest(Bundle_Kind const *kind, char const *path, Str text,
+                           Manifest *manifest) {
+    assert(manifest != NULL);
     manifest->count = 0;
     Bundle *bundle = NULL;
     size_t line_number = 0;
@@ -203,10 +235,13 @@ static bool parse_manifest(Bundle_Kind const *kind, char const *path, Str text, 
         if (str_ends_with(line, STR(":"))) {
             Str const name = str_slice(line, 0, line.len - 1);
             if (!is_bundle_name(name)) {
-                return manifest_error(path, line_number, "bundle names use a-z, 0-9, - and _: ", name);
+                return manifest_error(path, line_number,
+                                      "bundle names use a-z, 0-9, - and _: ", name);
             }
             if (str_eq(name, SHARED_DIR)) {
-                return manifest_error(path, line_number, "\"shared\" holds sources for all bundles; it cannot be a bundle", STR(""));
+                return manifest_error(path, line_number,
+                                      "\"shared\" holds sources for all bundles; "
+                                      "it cannot be a bundle", STR(""));
             }
             for (size_t i = 0; i < manifest->count; i++) {
                 if (str_eq(manifest->bundles[i].name, name)) {
@@ -227,7 +262,9 @@ static bool parse_manifest(Bundle_Kind const *kind, char const *path, Str text, 
             return manifest_error(path, line_number, "a source before any bundle heading: ", line);
         }
         if (!source_allowed(kind, bundle->name, line)) {
-            fprintf(stderr, "%s:%zu: bundle \"%.*s\" may only use %.*s files in shared/ and %.*s/, not %.*s\n",
+            fprintf(stderr,
+                    "%s:%zu: bundle \"%.*s\" may only use %.*s files in shared/ and %.*s/, "
+                    "not %.*s\n",
                     path, line_number, STR_ARG(bundle->name), STR_ARG(kind->extension),
                     STR_ARG(bundle->name), STR_ARG(line));
             return false;
@@ -248,13 +285,15 @@ static bool parse_manifest(Bundle_Kind const *kind, char const *path, Str text, 
     }
     for (size_t i = 0; i < manifest->count; i++) {
         if (manifest->bundles[i].source_count == 0) {
-            return manifest_error(path, manifest->bundles[i].line, "bundle without sources: ", manifest->bundles[i].name);
+            return manifest_error(path, manifest->bundles[i].line,
+                                  "bundle without sources: ", manifest->bundles[i].name);
         }
     }
     return true;
 }
 
 void bundler_print_error(Str source, Minify_Error const *error) {
+    assert(error != NULL);
     if (error->line > 0) {
         fprintf(stderr, "%.*s:%zu: %.*s\n", STR_ARG(source), error->line, STR_ARG(error->message));
     } else {
@@ -263,95 +302,137 @@ void bundler_print_error(Str source, Minify_Error const *error) {
 }
 
 /**
- * Builds one bundle: reads and checks its sources and writes
- * <out_dir>/<name><extension>.
+ * Reads the sources of a bundle into the arena.
  *
+ * @param contents Receives the contents of each source, in order.
+ * @param input_size Receives the total size of the sources, in bytes.
  * @return EXIT_SUCCESS, or the sysexits.h code for what went wrong.
  */
-static int build_bundle(Bundle_Kind const *kind, Arena *arena, Bundle const *bundle, Str source_dir, Str out_dir,
-                        bool minify) {
-    Str contents[BUNDLER_MAX_SOURCES];
-    size_t input_size = 0;
+static int read_sources(Bundler const *b, Bundle const *bundle, Str source_dir, Str *contents,
+                        size_t *input_size) {
+    assert(contents != NULL);
+    assert(input_size != NULL);
+    *input_size = 0;
     for (size_t i = 0; i < bundle->source_count; i++) {
         char path[PATH_CAPACITY];
         if (!join_path(source_dir, bundle->sources[i], STR(""), path, sizeof path)) {
             fprintf(stderr, "%.*s: path too long\n", STR_ARG(bundle->sources[i]));
             return EX_USAGE;
         }
-        if (!read_file(arena, path, &contents[i])) {
+        if (!read_file(b->arena, path, &contents[i])) {
             return EX_NOINPUT;
         }
-        input_size += contents[i].len;
+        *input_size += contents[i].len;
     }
-    if (kind->check != NULL && !kind->check(arena, bundle, contents)) {
+    return EXIT_SUCCESS;
+}
+
+/**
+ * Writes the comment that says where a bundle comes from, and the prologue.
+ */
+static void write_header(Bundler const *b, Bundle const *bundle, Str_Builder *out) {
+    assert(out != NULL);
+    Bundle_Kind const *kind = b->kind;
+    str_builder_append(out, kind->comment_start);
+    str_builder_append(out, STR("Built by "));
+    str_builder_append(out, str_from_cstr(kind->program));
+    str_builder_append(out, STR(" from "));
+    for (size_t i = 0; i < bundle->source_count; i++) {
+        if (i > 0) {
+            str_builder_append(out, STR(", "));
+        }
+        str_builder_append(out, kind->source_root);
+        str_builder_append_char(out, '/');
+        str_builder_append(out, bundle->sources[i]);
+    }
+    str_builder_append(out, STR(". Edit those, not this file."));
+    str_builder_append(out, kind->comment_end);
+    str_builder_append(out, b->minify ? kind->prologue : kind->prologue_plain);
+}
+
+/**
+ * Appends the sources, minified and joined or as they are with a comment before
+ * each, and then the epilogue.
+ *
+ * @return EXIT_SUCCESS, or EX_DATAERR when a source cannot be minified.
+ */
+static int write_body(Bundler const *b, Bundle const *bundle, Str const *contents,
+                      Str_Builder *out) {
+    assert(out != NULL);
+    Bundle_Kind const *kind = b->kind;
+    for (size_t i = 0; i < bundle->source_count; i++) {
+        if (b->minify) {
+            size_t const separator = out->len;
+            if (i > 0) {
+                str_builder_append(out, kind->separator);
+            }
+            Minify_Error error;
+            if (!kind->minify(contents[i], out, &error)) {
+                bundler_print_error(bundle->sources[i], &error);
+                return EX_DATAERR;
+            }
+            if (kind->after_source != NULL && !out->overflow) {
+                kind->after_source(out, separator, i);
+            }
+        } else {
+            str_builder_append_char(out, '\n');
+            str_builder_append(out, kind->comment_start);
+            str_builder_append(out, STR("---- "));
+            str_builder_append(out, kind->source_root);
+            str_builder_append_char(out, '/');
+            str_builder_append(out, bundle->sources[i]);
+            str_builder_append(out, STR(" ----"));
+            str_builder_append(out, kind->comment_end);
+            str_builder_append_char(out, '\n');
+            str_builder_append(out, contents[i]);
+            str_builder_append(out, kind->plain_source_end);
+        }
+    }
+    if (b->minify && kind->after_sources != NULL && !out->overflow) {
+        kind->after_sources(out);
+    }
+    str_builder_append(out, b->minify ? kind->epilogue : kind->epilogue_plain);
+    return EXIT_SUCCESS;
+}
+
+/**
+ * Builds one bundle: reads and checks its sources and writes
+ * <out_dir>/<name><extension>.
+ *
+ * @return EXIT_SUCCESS, or the sysexits.h code for what went wrong.
+ */
+static int build_bundle(Bundler const *b, Bundle const *bundle, Str source_dir) {
+    Str contents[BUNDLER_MAX_SOURCES];
+    size_t input_size;
+    int status = read_sources(b, bundle, source_dir, contents, &input_size);
+    if (status != EXIT_SUCCESS) {
+        return status;
+    }
+    if (b->kind->check != NULL && !b->kind->check(b->arena, bundle, contents)) {
         return EX_DATAERR;
     }
 
     // Minified code is never longer than its source, so this always fits.
     size_t const capacity = input_size + OUTPUT_OVERHEAD + bundle->source_count * PATH_CAPACITY;
-    char *buf = arena_alloc(arena, capacity, 1);
+    char *buf = arena_alloc(b->arena, capacity, 1);
     if (buf == NULL) {
         fprintf(stderr, "bundle \"%.*s\": out of memory\n", STR_ARG(bundle->name));
         return EX_SOFTWARE;
     }
     Str_Builder out;
     str_builder_init(&out, buf, capacity);
-
-    str_builder_append(&out, kind->comment_start);
-    str_builder_append(&out, STR("Built by "));
-    str_builder_append(&out, str_from_cstr(kind->program));
-    str_builder_append(&out, STR(" from "));
-    for (size_t i = 0; i < bundle->source_count; i++) {
-        if (i > 0) {
-            str_builder_append(&out, STR(", "));
-        }
-        str_builder_append(&out, kind->source_root);
-        str_builder_append_char(&out, '/');
-        str_builder_append(&out, bundle->sources[i]);
+    write_header(b, bundle, &out);
+    status = write_body(b, bundle, contents, &out);
+    if (status != EXIT_SUCCESS) {
+        return status;
     }
-    str_builder_append(&out, STR(". Edit those, not this file."));
-    str_builder_append(&out, kind->comment_end);
-    str_builder_append(&out, minify ? kind->prologue : kind->prologue_plain);
-
-    for (size_t i = 0; i < bundle->source_count; i++) {
-        if (minify) {
-            size_t const separator = out.len;
-            if (i > 0) {
-                str_builder_append(&out, kind->separator);
-            }
-            Minify_Error error;
-            if (!kind->minify(contents[i], &out, &error)) {
-                bundler_print_error(bundle->sources[i], &error);
-                return EX_DATAERR;
-            }
-            if (kind->after_source != NULL && !out.overflow) {
-                kind->after_source(&out, separator, i);
-            }
-        } else {
-            str_builder_append_char(&out, '\n');
-            str_builder_append(&out, kind->comment_start);
-            str_builder_append(&out, STR("---- "));
-            str_builder_append(&out, kind->source_root);
-            str_builder_append_char(&out, '/');
-            str_builder_append(&out, bundle->sources[i]);
-            str_builder_append(&out, STR(" ----"));
-            str_builder_append(&out, kind->comment_end);
-            str_builder_append_char(&out, '\n');
-            str_builder_append(&out, contents[i]);
-            str_builder_append(&out, kind->plain_source_end);
-        }
-    }
-    if (minify && kind->after_sources != NULL && !out.overflow) {
-        kind->after_sources(&out);
-    }
-    str_builder_append(&out, minify ? kind->epilogue : kind->epilogue_plain);
     if (out.overflow) {
         fprintf(stderr, "bundle \"%.*s\": output buffer full\n", STR_ARG(bundle->name));
         return EX_SOFTWARE;
     }
 
     char path[PATH_CAPACITY];
-    if (!join_path(out_dir, bundle->name, kind->extension, path, sizeof path)) {
+    if (!join_path(b->out_dir, bundle->name, b->kind->extension, path, sizeof path)) {
         fprintf(stderr, "bundle \"%.*s\": output path too long\n", STR_ARG(bundle->name));
         return EX_USAGE;
     }
@@ -399,7 +480,8 @@ static uint64_t watch_state(char const *manifest_path, Manifest const *manifest)
     for (size_t i = 0; i < manifest->count; i++) {
         for (size_t n = 0; n < manifest->bundles[i].source_count; n++) {
             char path[PATH_CAPACITY];
-            if (join_path(source_dir, manifest->bundles[i].sources[n], STR(""), path, sizeof path)) {
+            Str const source = manifest->bundles[i].sources[n];
+            if (join_path(source_dir, source, STR(""), path, sizeof path)) {
                 hash = hash_file(hash, path);
             }
         }
@@ -410,34 +492,36 @@ static uint64_t watch_state(char const *manifest_path, Manifest const *manifest)
 /**
  * Reads the manifest and builds every bundle.
  *
- * Memory above base is used for the build and given back at the start of the
- * next call. The manifest struct itself is below base and stays valid, so the
+ * Memory above b->base is used for the build and given back at the start of the
+ * next call. The manifest struct itself is below it and stays valid, so the
  * watcher can look at the sources of the last build.
  *
  * @param state Receives the state of the files as they were before the build,
  *              so a change made during the build causes another build.
  * @return EXIT_SUCCESS, or the sysexits.h code for what went wrong.
  */
-static int build_all(Bundle_Kind const *kind, Arena *arena, size_t base, Manifest *manifest,
-                     char const *manifest_path, Str out_dir, bool minify, uint64_t *state) {
-    arena->used = base;
+static int build_all(Bundler const *b, uint64_t *state) {
+    assert(state != NULL);
+    Arena *arena = b->arena;
+    Manifest *manifest = b->manifest;
+    arena->used = b->base;
     manifest->count = 0;
-    *state = hash_file(HASH_START, manifest_path);
+    *state = hash_file(HASH_START, b->manifest_path);
     Str manifest_text;
-    if (!read_file(arena, manifest_path, &manifest_text)) {
+    if (!read_file(arena, b->manifest_path, &manifest_text)) {
         return EX_NOINPUT;
     }
-    bool const parsed = parse_manifest(kind, manifest_path, manifest_text, manifest);
-    *state = watch_state(manifest_path, manifest);
+    bool const parsed = parse_manifest(b->kind, b->manifest_path, manifest_text, manifest);
+    *state = watch_state(b->manifest_path, manifest);
     if (!parsed) {
         return EX_DATAERR;
     }
 
-    Str const source_dir = directory_of(str_from_cstr(manifest_path));
+    Str const source_dir = directory_of(str_from_cstr(b->manifest_path));
     for (size_t i = 0; i < manifest->count; i++) {
         // Each bundle's files and output are discarded once it is written.
         size_t const mark = arena->used;
-        int const status = build_bundle(kind, arena, &manifest->bundles[i], source_dir, out_dir, minify);
+        int const status = build_bundle(b, &manifest->bundles[i], source_dir);
         if (status != EXIT_SUCCESS) {
             return status;
         }
@@ -449,20 +533,20 @@ static int build_all(Bundle_Kind const *kind, Arena *arena, size_t base, Manifes
 /**
  * Rebuilds whenever the files change; does not return.
  */
-static void watch(Bundle_Kind const *kind, Arena *arena, size_t base, Manifest *manifest,
-                  char const *manifest_path, Str out_dir, bool minify) {
+static void watch(Bundler const *b) {
     for (;;) {
         uint64_t state;
-        int const status = build_all(kind, arena, base, manifest, manifest_path, out_dir, minify, &state);
+        int const status = build_all(b, &state);
         if (status == EXIT_SUCCESS) {
-            printf("Watching %s and its sources for changes.\n", manifest_path);
+            printf("Watching %s and its sources for changes.\n", b->manifest_path);
         } else {
-            printf("Build failed; waiting for changes to %s or its sources.\n", manifest_path);
+            printf("Build failed; waiting for changes to %s or its sources.\n",
+                   b->manifest_path);
         }
         fflush(stdout);
         fflush(stderr);
 
-        while (watch_state(manifest_path, manifest) == state) {
+        while (watch_state(b->manifest_path, b->manifest) == state) {
             struct timespec const pause = {
                 .tv_sec = 0,
                 .tv_nsec = WATCH_POLL_MS * 1000000L,
@@ -477,6 +561,7 @@ static void watch(Bundle_Kind const *kind, Arena *arena, size_t base, Manifest *
  * Creates a directory and any missing parents, like mkdir -p.
  */
 static bool make_directories(char const *path) {
+    assert(path != NULL);
     char buf[PATH_CAPACITY];
     Str const full = str_from_cstr(path);
     for (size_t end = 1; end <= full.len; end++) {
@@ -495,39 +580,74 @@ static bool make_directories(char const *path) {
     return true;
 }
 
-int bundler_main(int argc, char **argv, Bundle_Kind const *kind) {
-    char const *out_dir_arg = NULL;
-    bool minify = true;
-    bool watching = false;
+/**
+ * The command line.
+ */
+typedef struct {
+    char const *out_dir;
+    char const *manifest_path;
+    bool        minify;
+    bool        watching;
+} Options;
+
+/**
+ * Reads the command line.
+ *
+ * @param options Receives the options.
+ * @param status Receives the exit status when the tool should stop right away.
+ * @return True when the tool should go on and build.
+ */
+static bool parse_options(int argc, char **argv, Bundle_Kind const *kind, Options *options,
+                          int *status) {
+    assert(options != NULL);
+    assert(status != NULL);
+    *options = (Options) {
+        .out_dir = NULL,
+        .manifest_path = NULL,
+        .minify = true,
+        .watching = false,
+    };
     int opt;
     while ((opt = getopt(argc, argv, "nwo:h")) != -1) {
         switch (opt) {
             case 'n':
-                minify = false;
+                options->minify = false;
                 break;
             case 'w':
-                watching = true;
+                options->watching = true;
                 break;
             case 'o':
-                out_dir_arg = optarg;
+                options->out_dir = optarg;
                 break;
             default:
                 usage(kind);
-                return opt == 'h' ? EXIT_SUCCESS : EX_USAGE;
+                *status = opt == 'h' ? EXIT_SUCCESS : EX_USAGE;
+                return false;
         }
     }
-    if (out_dir_arg == NULL || optind != argc - 1) {
+    if (options->out_dir == NULL || optind != argc - 1) {
         usage(kind);
-        return EX_USAGE;
+        *status = EX_USAGE;
+        return false;
     }
-    char const *manifest_path = argv[optind];
+    options->manifest_path = argv[optind];
+    return true;
+}
+
+int bundler_main(int argc, char **argv, Bundle_Kind const *kind) {
+    Options options;
+    int status;
+    if (!parse_options(argc, argv, kind, &options, &status)) {
+        return status;
+    }
 
     // The output directory is generated, so it may not exist yet.
-    if (!make_directories(out_dir_arg)) {
+    if (!make_directories(options.out_dir)) {
         return EX_CANTCREAT;
     }
 
-    void *memory = mmap(NULL, MEMORY_SIZE, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
+    void *memory = mmap(NULL, MEMORY_SIZE, PROT_READ | PROT_WRITE,
+                        MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
     if (memory == MAP_FAILED) {
         perror("mmap");
         return EX_OSERR;
@@ -538,13 +658,20 @@ int bundler_main(int argc, char **argv, Bundle_Kind const *kind) {
     if (manifest == NULL) {
         return EX_SOFTWARE;
     }
-    size_t const base = arena.used;
 
-    Str const out_dir = str_from_cstr(out_dir_arg);
-    if (watching) {
-        watch(kind, &arena, base, manifest, manifest_path, out_dir, minify);
+    Bundler const bundler = {
+        .kind = kind,
+        .arena = &arena,
+        .base = arena.used,
+        .manifest = manifest,
+        .manifest_path = options.manifest_path,
+        .out_dir = str_from_cstr(options.out_dir),
+        .minify = options.minify,
+    };
+    if (options.watching) {
+        watch(&bundler);
         return EXIT_SUCCESS;  // Not reached.
     }
     uint64_t state;
-    return build_all(kind, &arena, base, manifest, manifest_path, out_dir, minify, &state);
+    return build_all(&bundler, &state);
 }

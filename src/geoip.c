@@ -1,5 +1,6 @@
 #include "geoip.h"
 
+#include <assert.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
@@ -15,6 +16,7 @@ static uint32_t read_u32_le(uint8_t const *p) {
 static void clear(Geoip *g) {
     *g = (Geoip) {
         .map = NULL,
+        .region = NULL,
         .map_size = 0,
         .v4_count = 0,
         .v6_count = 0,
@@ -26,6 +28,8 @@ static void clear(Geoip *g) {
 }
 
 bool geoip_open(Geoip *g, char const *path) {
+    assert(g != NULL);
+    assert(path != NULL);
     clear(g);
     int const fd = open(path, O_RDONLY | O_CLOEXEC);
     if (fd < 0) {
@@ -49,12 +53,13 @@ bool geoip_open(Geoip *g, char const *path) {
     uint64_t const v4 = read_u32_le(bytes + GEOIP_MAGIC_SIZE);
     uint64_t const v6 = read_u32_le(bytes + GEOIP_MAGIC_SIZE + 4);
     uint64_t const expected = GEOIP_HEADER_SIZE + v4 * (4 + 2) + v6 * (16 + 2);
-    if (memcmp(bytes, GEOIP_MAGIC, GEOIP_MAGIC_SIZE) != 0 || expected != size) {
+    if (memcmp(bytes, GEOIP_MAGIC.data, GEOIP_MAGIC.len) != 0 || expected != size) {
         fprintf(stderr, "geoip: %s is not a country file made by kasin-geoip\n", path);
         munmap(map, size);
         return false;
     }
     g->map = bytes;
+    g->region = map;
     g->map_size = size;
     g->v4_count = (uint32_t)v4;
     g->v6_count = (uint32_t)v6;
@@ -66,8 +71,8 @@ bool geoip_open(Geoip *g, char const *path) {
 }
 
 void geoip_close(Geoip *g) {
-    if (g->map != NULL) {
-        munmap((void *)g->map, g->map_size);
+    if (g->region != NULL) {
+        munmap(g->region, g->map_size);
     }
     clear(g);
 }
@@ -92,6 +97,7 @@ static int64_t find_range(uint8_t const *starts, uint32_t count, size_t width, u
 }
 
 bool geoip_country(Geoip const *g, Ip_Address const *ip, char country[2]) {
+    assert(country != NULL);
     if (g->map == NULL) {
         return false;
     }
@@ -102,7 +108,9 @@ bool geoip_country(Geoip const *g, Ip_Address const *ip, char country[2]) {
         return false;
     }
     uint8_t const *code = (v4 ? g->v4_countries : g->v6_countries) + (size_t)i * 2;
-    if (code[0] < 'A' || code[0] > 'Z' || code[1] < 'A' || code[1] > 'Z' || (code[0] == 'Z' && code[1] == 'Z')) {
+    bool const letters = code[0] >= 'A' && code[0] <= 'Z' && code[1] >= 'A' && code[1] <= 'Z';
+    bool const unknown = code[0] == 'Z' && code[1] == 'Z';
+    if (!letters || unknown) {
         return false;
     }
     country[0] = (char)code[0];

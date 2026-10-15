@@ -251,13 +251,17 @@ Db_Status db_record_login(Db *db, Db_Login_Attempt const *attempt);
 Db_Status db_login_report_json(Db *db, Str_Builder *out);
 
 /**
+ * Receives one address's recent failed logins: the address in text form, how many there are and
+ * when the last one was, in Unix seconds. See db_recent_login_failures().
+ */
+typedef void (*Db_Failure_Callback)(void *context, Str ip, uint32_t failures, int64_t last_failure);
+
+/**
  * Calls each() for every address with failed logins since a time that still
  * count towards a wait or ban: those after its last successful login and
  * after an admin last lifted its block. Used to restore the limits at startup.
  */
-Db_Status db_recent_login_failures(Db *db, int64_t since,
-                                   void (*each)(void *context, Str ip, uint32_t failures, int64_t last_failure),
-                                   void *context);
+Db_Status db_recent_login_failures(Db *db, int64_t since, Db_Failure_Callback each, void *context);
 
 /**
  * Lifts a client's block: its failures so far no longer count.

@@ -1,5 +1,6 @@
 #include "sha256.h"
 
+#include <assert.h>
 #include <string.h>
 
 static uint32_t const K[64] = {
@@ -18,12 +19,13 @@ static uint32_t rotr(uint32_t x, uint32_t n) {
 }
 
 static void compress(uint32_t state[8], uint8_t const block[SHA256_BLOCK_SIZE]) {
+    assert(state != NULL);
     uint32_t w[64];
-    for (int i = 0; i < 16; i++) {
+    for (size_t i = 0; i < 16; i++) {
         w[i] = (uint32_t)block[i * 4] << 24 | (uint32_t)block[i * 4 + 1] << 16 |
                (uint32_t)block[i * 4 + 2] << 8 | (uint32_t)block[i * 4 + 3];
     }
-    for (int i = 16; i < 64; i++) {
+    for (size_t i = 16; i < 64; i++) {
         uint32_t s0 = rotr(w[i - 15], 7) ^ rotr(w[i - 15], 18) ^ (w[i - 15] >> 3);
         uint32_t s1 = rotr(w[i - 2], 17) ^ rotr(w[i - 2], 19) ^ (w[i - 2] >> 10);
         w[i] = w[i - 16] + s0 + w[i - 7] + s1;
@@ -37,7 +39,7 @@ static void compress(uint32_t state[8], uint8_t const block[SHA256_BLOCK_SIZE]) 
     uint32_t f = state[5];
     uint32_t g = state[6];
     uint32_t h = state[7];
-    for (int i = 0; i < 64; i++) {
+    for (size_t i = 0; i < 64; i++) {
         uint32_t s1 = rotr(e, 6) ^ rotr(e, 11) ^ rotr(e, 25);
         uint32_t ch = (e & f) ^ (~e & g);
         uint32_t t1 = h + s1 + ch + K[i] + w[i];
@@ -93,6 +95,7 @@ void sha256_update(Sha256 *ctx, void const *data, size_t len) {
 }
 
 void sha256_final(Sha256 *ctx, uint8_t out[SHA256_DIGEST_SIZE]) {
+    assert(out != NULL);
     uint64_t bit_len = ctx->total_len * 8;
     uint8_t pad = 0x80;
     sha256_update(ctx, &pad, 1);
@@ -101,11 +104,11 @@ void sha256_final(Sha256 *ctx, uint8_t out[SHA256_DIGEST_SIZE]) {
         sha256_update(ctx, &zero, 1);
     }
     uint8_t len_be[8];
-    for (int i = 0; i < 8; i++) {
+    for (size_t i = 0; i < 8; i++) {
         len_be[i] = (uint8_t)(bit_len >> (56 - 8 * i));
     }
     sha256_update(ctx, len_be, sizeof len_be);
-    for (int i = 0; i < 8; i++) {
+    for (size_t i = 0; i < 8; i++) {
         out[i * 4] = (uint8_t)(ctx->state[i] >> 24);
         out[i * 4 + 1] = (uint8_t)(ctx->state[i] >> 16);
         out[i * 4 + 2] = (uint8_t)(ctx->state[i] >> 8);
@@ -115,6 +118,7 @@ void sha256_final(Sha256 *ctx, uint8_t out[SHA256_DIGEST_SIZE]) {
 
 void hmac_sha256(void const *key, size_t key_len, void const *msg, size_t msg_len,
                  uint8_t out[SHA256_DIGEST_SIZE]) {
+    assert(out != NULL);
     uint8_t key_block[SHA256_BLOCK_SIZE] = {
         0,
     };
@@ -131,7 +135,7 @@ void hmac_sha256(void const *key, size_t key_len, void const *msg, size_t msg_le
     uint8_t inner_digest[SHA256_DIGEST_SIZE];
     Sha256 ctx;
 
-    for (int i = 0; i < SHA256_BLOCK_SIZE; i++) {
+    for (size_t i = 0; i < SHA256_BLOCK_SIZE; i++) {
         pad[i] = key_block[i] ^ 0x36;
     }
     sha256_init(&ctx);
@@ -139,7 +143,7 @@ void hmac_sha256(void const *key, size_t key_len, void const *msg, size_t msg_le
     sha256_update(&ctx, msg, msg_len);
     sha256_final(&ctx, inner_digest);
 
-    for (int i = 0; i < SHA256_BLOCK_SIZE; i++) {
+    for (size_t i = 0; i < SHA256_BLOCK_SIZE; i++) {
         pad[i] = key_block[i] ^ 0x5c;
     }
     sha256_init(&ctx);

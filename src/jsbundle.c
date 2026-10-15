@@ -13,13 +13,17 @@
  * The sources are minified by jsmin.h.
  */
 
+#include <assert.h>
 #include <stdio.h>
 
 #include "bundler.h"
 #include "jsmin.h"
 #include "str.h"
 
-#define MAX_NAMES 4096
+enum {
+    /** Most top-level names across the sources of one bundle. */
+    MAX_NAMES = 4096,
+};
 
 /**
  * Checks that no two sources of a bundle declare the same top-level name.
@@ -44,7 +48,9 @@ static bool check_names(Arena *arena, Bundle const *bundle, Str const *contents)
             owner[n] = i;
             for (size_t m = 0; m < n; m++) {
                 if (owner[m] != i && str_eq(names[m].name, names[n].name)) {
-                    fprintf(stderr, "bundle \"%.*s\": %.*s:%zu and %.*s:%zu both declare \"%.*s\" at the top level\n",
+                    fprintf(stderr,
+                            "bundle \"%.*s\": %.*s:%zu and %.*s:%zu both declare \"%.*s\" "
+                            "at the top level\n",
                             STR_ARG(bundle->name),
                             STR_ARG(bundle->sources[owner[m]]), names[m].line,
                             STR_ARG(bundle->sources[i]), names[n].line,
@@ -64,6 +70,7 @@ static bool check_names(Arena *arena, Bundle const *bundle, Str const *contents)
  * not end with ";": then the separator becomes ";".
  */
 static void join_source(Str_Builder *out, size_t separator, size_t index) {
+    assert(out != NULL);
     if (index > 0 && out->len > separator + 1 &&
         str_find_char(STR("([`+-/"), out->data[separator + 1]) != STR_NPOS &&
         out->data[separator - 1] != ';') {
@@ -75,6 +82,7 @@ static void join_source(Str_Builder *out, size_t separator, size_t index) {
  * A last statement without ";" would otherwise run into the wrapper's end.
  */
 static void end_sources(Str_Builder *out) {
+    assert(out != NULL);
     char const last = out->data[out->len - 1];
     if (last != ';' && last != '}') {
         str_builder_append_char(out, ';');

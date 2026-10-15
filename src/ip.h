@@ -14,7 +14,10 @@
 
 #include "str.h"
 
-#define IP_TEXT_SIZE 46  /**< Longest text form (INET6_ADDRSTRLEN), with its terminator. */
+enum {
+    /** Longest text form of an address (INET6_ADDRSTRLEN) with its terminator, in bytes. */
+    IP_TEXT_SIZE = 46,
+};
 
 typedef struct {
     uint8_t bytes[16];

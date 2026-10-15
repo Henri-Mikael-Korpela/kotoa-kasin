@@ -1,16 +1,14 @@
 #include "jsmin.h"
 
+#include <assert.h>
 #include <stdint.h>
 
-/**
- * Deepest nesting of braces and template substitutions the lexer follows.
- */
-#define MAX_BRACE_DEPTH 256
-
-/**
- * Deepest nesting of parentheses the minifier follows.
- */
-#define MAX_PAREN_DEPTH 256
+enum {
+    /** Deepest nesting of braces and template substitutions the lexer follows. */
+    MAX_BRACE_DEPTH = 256,
+    /** Deepest nesting of parentheses the minifier follows. */
+    MAX_PAREN_DEPTH = 256,
+};
 
 typedef enum {
     TOKEN_END,
@@ -38,23 +36,27 @@ typedef enum {
 } Brace_Kind;
 
 typedef struct {
-    Str        source;
-    size_t     pos;
-    Token      prev;  /**< The last token returned, to tell a regular expression from a division. */
-    uint8_t    braces[MAX_BRACE_DEPTH];
-    size_t     brace_depth;
-    Minify_Error  *error;
+    Str           source;
+    size_t        pos;
+    /** The last token returned, to tell a regular expression from a division. */
+    Token         prev;
+    uint8_t       braces[MAX_BRACE_DEPTH];
+    size_t        brace_depth;
+    Minify_Error *error;
 } Lexer;
 
 typedef struct {
-    Str_Builder *out;
-    Token        prev;               /**< The last token written; TOKEN_END before the first. */
-    bool         prev_closes_head;   /**< prev is the ")" ending an if, for, while or with head. */
-    bool         paren_is_head[MAX_PAREN_DEPTH];
-    size_t       paren_depth;
-    Token        pending;            /**< A ";" or "," held back until the next token shows whether it is needed. */
-    bool         has_pending;
-    Minify_Error    *error;
+    Str_Builder  *out;
+    /** The last token written; TOKEN_END before the first. */
+    Token         prev;
+    /** prev is the ")" ending an if, for, while or with head. */
+    bool          prev_closes_head;
+    bool          paren_is_head[MAX_PAREN_DEPTH];
+    size_t        paren_depth;
+    /** A ";" or "," held back until the next token shows whether it is needed. */
+    Token         pending;
+    bool          has_pending;
+    Minify_Error *error;
 } Emitter;
 
 /**
@@ -127,6 +129,9 @@ static Str const HEAD_KEYWORDS[] = {
     STR_INIT("with"),
 };
 
+/**
+ * Number of elements of an array. A macro because it works for every element type.
+ */
 #define COUNT_OF(array) (sizeof (array) / sizeof (array)[0])
 
 static unsigned char byte_at(Str s, size_t i) {
@@ -168,6 +173,7 @@ static bool is_word_byte(unsigned char c) {
  * @param line_break Set when it is a line terminator.
  */
 static size_t space_at(Str s, size_t pos, bool *line_break) {
+    assert(line_break != NULL);
     unsigned char const c = byte_at(s, pos);
     *line_break = false;
     if (c == ' ' || c == '\t' || c == '\v' || c == '\f') {
@@ -183,7 +189,9 @@ static size_t space_at(Str s, size_t pos, bool *line_break) {
     if (c == 0xEF && byte_at(s, pos + 1) == 0xBB && byte_at(s, pos + 2) == 0xBF) {
         return 3;  // Byte order mark.
     }
-    if (c == 0xE2 && byte_at(s, pos + 1) == 0x80 && (byte_at(s, pos + 2) == 0xA8 || byte_at(s, pos + 2) == 0xA9)) {
+    bool const separator = c == 0xE2 && byte_at(s, pos + 1) == 0x80 &&
+                           (byte_at(s, pos + 2) == 0xA8 || byte_at(s, pos + 2) == 0xA9);
+    if (separator) {
         *line_break = true;  // Line and paragraph separators.
         return 3;
     }
@@ -206,6 +214,7 @@ static size_t line_of(Str s, size_t offset) {
 }
 
 static bool fail(Minify_Error *error, Str source, size_t offset, Str message) {
+    assert(error != NULL);
     error->line = line_of(source, offset);
     error->message = message;
     return false;
@@ -243,6 +252,7 @@ static bool push_brace(Lexer *lx, Brace_Kind kind, size_t offset) {
  * @param newline Set when a line terminator was skipped, also inside a comment.
  */
 static bool skip_space(Lexer *lx, bool *newline) {
+    assert(newline != NULL);
     Str const s = lx->source;
     *newline = false;
     while (lx->pos < s.len) {
@@ -277,6 +287,7 @@ static bool skip_space(Lexer *lx, bool *newline) {
 }
 
 static bool scan_string(Lexer *lx, Token *token) {
+    assert(token != NULL);
     Str const s = lx->source;
     unsigned char const quote = byte_at(s, lx->pos);
     size_t pos = lx->pos + 1;
@@ -304,6 +315,7 @@ static bool scan_string(Lexer *lx, Token *token) {
  * substitution (not head) to the closing "`" or the next "${".
  */
 static bool scan_template(Lexer *lx, Token *token, bool head) {
+    assert(token != NULL);
     Str const s = lx->source;
     size_t pos = lx->pos + 1;
     while (pos < s.len) {
@@ -326,6 +338,7 @@ static bool scan_template(Lexer *lx, Token *token, bool head) {
 }
 
 static bool scan_regex(Lexer *lx, Token *token) {
+    assert(token != NULL);
     Str const s = lx->source;
     size_t pos = lx->pos + 1;
     bool in_class = false;
@@ -357,11 +370,14 @@ static bool scan_regex(Lexer *lx, Token *token) {
 }
 
 static void scan_number(Lexer *lx, Token *token) {
+    assert(token != NULL);
     Str const s = lx->source;
     size_t pos = lx->pos;
     unsigned char const second = byte_at(s, pos + 1);
-    if (byte_at(s, pos) == '0' && (second == 'x' || second == 'X' || second == 'b' || second == 'B' ||
-                                   second == 'o' || second == 'O')) {
+    bool const radix_prefix = byte_at(s, pos) == '0' &&
+                              (second == 'x' || second == 'X' || second == 'b' || second == 'B' ||
+                               second == 'o' || second == 'O');
+    if (radix_prefix) {
         pos += 2;
         while (pos < s.len && (is_ascii_letter(byte_at(s, pos)) || is_digit(byte_at(s, pos)) ||
                                byte_at(s, pos) == '_')) {
@@ -396,6 +412,7 @@ static void scan_number(Lexer *lx, Token *token) {
 }
 
 static void scan_word(Lexer *lx, Token *token) {
+    assert(token != NULL);
     Str const s = lx->source;
     size_t pos = lx->pos + 1;  // The first byte may be "#".
     if (byte_at(s, lx->pos) == '\\') {
@@ -420,6 +437,7 @@ static void scan_word(Lexer *lx, Token *token) {
 }
 
 static bool scan_punct(Lexer *lx, Token *token) {
+    assert(token != NULL);
     Str const s = lx->source;
     Str const rest = str_slice(s, lx->pos, s.len);
     size_t len = 1;
@@ -453,6 +471,7 @@ static bool scan_punct(Lexer *lx, Token *token) {
  * Reads the next token. At the end of the source the token is TOKEN_END.
  */
 static bool lex_next(Lexer *lx, Token *token) {
+    assert(token != NULL);
     Str const s = lx->source;
     bool newline;
     if (!skip_space(lx, &newline)) {
@@ -473,7 +492,8 @@ static bool lex_next(Lexer *lx, Token *token) {
             ok = scan_string(lx, token);
         } else if (c == '`') {
             ok = scan_template(lx, token, true);
-        } else if (c == '}' && lx->brace_depth > 0 && lx->braces[lx->brace_depth - 1] == BRACE_TEMPLATE) {
+        } else if (c == '}' && lx->brace_depth > 0 &&
+                   lx->braces[lx->brace_depth - 1] == BRACE_TEMPLATE) {
             lx->brace_depth--;
             ok = scan_template(lx, token, false);
         } else if (is_digit(c) || (c == '.' && is_digit(byte_at(s, start + 1)))) {
@@ -593,8 +613,10 @@ static bool write_token(Emitter *e, Token const *t) {
     bool closes_head = false;
     if (token_is(t, STR("("))) {
         if (e->paren_depth < MAX_PAREN_DEPTH) {
-            e->paren_is_head[e->paren_depth] = e->prev.kind == TOKEN_WORD &&
-                                               is_one_of(e->prev.text, HEAD_KEYWORDS, COUNT_OF(HEAD_KEYWORDS));
+            bool const after_head_keyword =
+                e->prev.kind == TOKEN_WORD &&
+                is_one_of(e->prev.text, HEAD_KEYWORDS, COUNT_OF(HEAD_KEYWORDS));
+            e->paren_is_head[e->paren_depth] = after_head_keyword;
         }
         e->paren_depth++;
     } else if (token_is(t, STR(")")) && e->paren_depth > 0) {
@@ -617,8 +639,11 @@ static bool pending_is_optional(Emitter const *e, Token const *t) {
          * it is an empty statement that something needs: "if (a);", "else;",
          * "do;" or "label:;".
          */
+        bool const else_or_do = e->prev.kind == TOKEN_WORD &&
+                                (str_eq(e->prev.text, STR("else")) ||
+                                 str_eq(e->prev.text, STR("do")));
         return token_is(t, STR("}")) && !e->prev_closes_head && !token_is(&e->prev, STR(":")) &&
-               !(e->prev.kind == TOKEN_WORD && (str_eq(e->prev.text, STR("else")) || str_eq(e->prev.text, STR("do"))));
+               !else_or_do;
     }
     if (token_is(t, STR("}")) || token_is(t, STR(")"))) {
         return true;  // A trailing comma in an object, a call or parameters.
@@ -643,6 +668,8 @@ static bool emit(Emitter *e, Token const *t) {
 }
 
 bool js_minify(Str source, Str_Builder *out, Minify_Error *error) {
+    assert(out != NULL);
+    assert(error != NULL);
     Lexer lx;
     lexer_init(&lx, source, error);
     Emitter e = {
@@ -666,47 +693,66 @@ bool js_minify(Str source, Str_Builder *out, Minify_Error *error) {
 
 // Top-level declarations.
 
-static bool add_name(Js_Name *names, size_t capacity, size_t *count, Str source, Token const *t, Minify_Error *error) {
-    if (*count == capacity) {
+/**
+ * The names found so far, in the caller's array.
+ */
+typedef struct {
+    Js_Name *names;
+    size_t   capacity;
+    size_t  *count;  /**< The caller's counter, updated as names are added. */
+} Name_List;
+
+static bool add_name(Name_List *list, Str source, Token const *t, Minify_Error *error) {
+    assert(list != NULL);
+    assert(error != NULL);
+    if (*list->count == list->capacity) {
         return fail(error, source, t->offset, STR("too many top-level names"));
     }
-    names[*count] = (Js_Name) {
+    list->names[*list->count] = (Js_Name) {
         .name = t->text,
         .line = line_of(source, t->offset),
     };
-    (*count)++;
+    (*list->count)++;
     return true;
 }
 
-bool js_top_level_names(Str source, Js_Name *names, size_t capacity, size_t *count, Minify_Error *error) {
+bool js_top_level_names(Str source, Js_Name *names, size_t capacity, size_t *count,
+                        Minify_Error *error) {
+    assert(names != NULL);
+    assert(count != NULL);
+    assert(error != NULL);
     Lexer lx;
     lexer_init(&lx, source, error);
     *count = 0;
+    Name_List list = {
+        .names = names,
+        .capacity = capacity,
+        .count = count,
+    };
     size_t depth = 0;
     bool statement_start = true;
     bool in_declaration = false;  // Inside a top-level const, let or var, until its ";".
     bool expect_name = false;
     Token t;
-    for (;;) {
-        if (!lex_next(&lx, &t)) {
-            return false;
-        }
-        if (t.kind == TOKEN_END) {
-            return true;
-        }
+    // Every token takes at least one byte, so the loop ends with the source.
+    bool ok = lex_next(&lx, &t);
+    for (; ok && t.kind != TOKEN_END; ok = lex_next(&lx, &t)) {
         bool next_statement_start = false;
         if (depth == 0) {
             if (expect_name && token_is(&t, STR("*"))) {
                 continue;  // function* name.
             }
             if (expect_name && t.kind == TOKEN_WORD) {
-                if (!add_name(names, capacity, count, source, &t, error)) {
+                if (!add_name(&list, source, &t, error)) {
                     return false;
                 }
             }
             expect_name = false;
             if (statement_start && t.kind == TOKEN_WORD) {
-                if (str_eq(t.text, STR("const")) || str_eq(t.text, STR("let")) || str_eq(t.text, STR("var"))) {
+                bool const declaration = str_eq(t.text, STR("const")) ||
+                                         str_eq(t.text, STR("let")) ||
+                                         str_eq(t.text, STR("var"));
+                if (declaration) {
                     in_declaration = true;
                     expect_name = true;
                 } else if (str_eq(t.text, STR("function")) || str_eq(t.text, STR("class"))) {
@@ -731,4 +777,5 @@ bool js_top_level_names(Str source, Js_Name *names, size_t capacity, size_t *cou
         statement_start = next_statement_start ||
                           (depth == 0 && (token_is(&t, STR(";")) || token_is(&t, STR("}"))));
     }
+    return ok;
 }

@@ -24,7 +24,10 @@ static void expect_minified(char const *input, char const *expected) {
         return;
     }
     if (!str_eq(str_builder_str(&out), str_from_cstr(expected))) {
-        printf("FAIL %s\n  got  %.*s\n  want %s\n", input, STR_ARG(str_builder_str(&out)), expected);
+        printf("FAIL %s\n  got  %.*s\n  want %s\n",
+               input,
+               STR_ARG(str_builder_str(&out)),
+               expected);
         FAILURES++;
     }
 }
@@ -40,7 +43,12 @@ static void expect_error(char const *input, size_t line, char const *message) {
         return;
     }
     if (error.line != line || !str_eq(error.message, str_from_cstr(message))) {
-        printf("FAIL %s\n  got  line %zu: %.*s\n  want line %zu: %s\n", input, error.line, STR_ARG(error.message), line, message);
+        printf("FAIL %s\n  got  line %zu: %.*s\n  want line %zu: %s\n",
+               input,
+               error.line,
+               STR_ARG(error.message),
+               line,
+               message);
         FAILURES++;
     }
 }
@@ -66,7 +74,10 @@ static void expect_names(char const *input, char const *expected) {
         str_builder_append_u64(&got, names[i].line);
     }
     if (!str_eq(str_builder_str(&got), str_from_cstr(expected))) {
-        printf("FAIL names of %s\n  got  %.*s\n  want %s\n", input, STR_ARG(str_builder_str(&got)), expected);
+        printf("FAIL names of %s\n  got  %.*s\n  want %s\n",
+               input,
+               STR_ARG(str_builder_str(&got)),
+               expected);
         FAILURES++;
     }
 }
@@ -87,7 +98,8 @@ int main(void) {
 
     // Spaces stay where tokens would merge.
     expect_minified("a = b + +c; d = e - -f; g = h + ++i;", "a=b+ +c;d=e- -f;g=h+ ++i;");
-    expect_minified("a = 1 .toString(); b = x in y; c = typeof d;", "a=1 .toString();b=x in y;c=typeof d;");
+    expect_minified("a = 1 .toString(); b = x in y; c = typeof d;",
+                    "a=1 .toString();b=x in y;c=typeof d;");
     expect_minified("x = a < !b; y = c-- > d;", "x=a< !b;y=c-- >d;");
     expect_minified("function f() { return 'x'; }", "function f(){return'x'}");
     expect_minified("a = .5 + 1.5e-3 + 0x1F + 10n;", "a=.5+1.5e-3+0x1F+10n;");
@@ -124,7 +136,8 @@ int main(void) {
     // Top-level declarations.
     expect_names("const A = 1, B = f(x, y);\nfunction g() { const C = 1; }\nclass D {}\n"
                  "const E = (function () { function F() {} return { G: 1, H }; })();\n"
-                 "let I = { J: 1, K: 2 }, L;\nasync function M() {}\nfunction* N() {}\nvar O = `${P}`;",
+                 "let I = { J: 1, K: 2 }, L;\nasync function M() {}\nfunction* N() {}\n"
+                 "var O = `${P}`;",
                  "A@1 B@1 g@2 D@3 E@4 I@5 L@5 M@6 N@7 O@8");
     expect_names("x = function y() {};\nif (a) { var b = 1; }", "");
 

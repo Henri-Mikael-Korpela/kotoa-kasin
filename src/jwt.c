@@ -1,5 +1,6 @@
 #include "jwt.h"
 
+#include <assert.h>
 #include <string.h>
 
 #include "sha256.h"
@@ -10,7 +11,10 @@ static Str const HEADER_B64 = STR_INIT("eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9");
 static Str const BASE64URL = STR_INIT(
     "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_");
 
-#define MAX_PAYLOAD 256
+enum {
+    /** Largest token payload, before base64url, in bytes. */
+    MAX_PAYLOAD = 256,
+};
 
 // Appends the base64url character for the low six bits of a value.
 static void append_sextet(Str_Builder *out, uint32_t value) {
@@ -18,6 +22,7 @@ static void append_sextet(Str_Builder *out, uint32_t value) {
 }
 
 static bool base64url_encode(Str_Builder *out, uint8_t const *data, size_t len) {
+    assert(out != NULL);
     size_t i = 0;
     while (i + 3 <= len) {
         uint32_t v = (uint32_t)data[i] << 16 | (uint32_t)data[i + 1] << 8 | data[i + 2];
@@ -61,6 +66,8 @@ static int base64url_value(char c) {
 }
 
 static bool base64url_decode(Str in, uint8_t *out, size_t capacity, size_t *out_len) {
+    assert(out != NULL);
+    assert(out_len != NULL);
     if (in.len % 4 == 1) {
         return false;
     }
@@ -86,14 +93,15 @@ static bool base64url_decode(Str in, uint8_t *out, size_t capacity, size_t *out_
     return true;
 }
 
-static bool sign(Str_Builder *out, Str signing_input, uint8_t const *key, size_t key_len) {
+static bool sign(Str_Builder *out, Str signing_input, Str key) {
     uint8_t mac[SHA256_DIGEST_SIZE];
-    hmac_sha256(key, key_len, signing_input.data, signing_input.len, mac);
+    hmac_sha256(key.data, key.len, signing_input.data, signing_input.len, mac);
     return base64url_encode(out, mac, sizeof mac);
 }
 
 // Reads a non-negative integer claim like "exp":123 from a payload we issued.
 static bool claim_int(Str payload, Str name, int64_t *value) {
+    assert(value != NULL);
     size_t at = str_find(payload, name);
     if (at == STR_NPOS) {
         return false;
@@ -111,8 +119,8 @@ static bool claim_int(Str payload, Str name, int64_t *value) {
     return true;
 }
 
-bool jwt_issue(Str_Builder *out, Str subject, int64_t issued_at, int64_t expires_at,
-               uint8_t const *key, size_t key_len) {
+bool jwt_issue(Str_Builder *out, Str subject, int64_t issued_at, int64_t expires_at, Str key) {
+    assert(out != NULL);
     if (subject.len == 0 || subject.len >= JWT_MAX_SUBJECT ||
         str_find_any(subject, STR("\"\\")) != STR_NPOS || issued_at < 0 || expires_at < 0) {
         return false;
@@ -141,10 +149,10 @@ bool jwt_issue(Str_Builder *out, Str subject, int64_t issued_at, int64_t expires
     }
     Str signing_input = str_make(out->data + start, out->len - start);
     str_builder_append(out, STR("."));
-    return sign(out, signing_input, key, key_len);
+    return sign(out, signing_input, key);
 }
 
-bool jwt_verify(Str token, uint8_t const *key, size_t key_len, int64_t now, Jwt_Claims *claims) {
+bool jwt_verify(Str token, Str key, int64_t now, Jwt_Claims *claims) {
     Str header;
     Str rest;
     Str payload_b64;
@@ -159,7 +167,7 @@ bool jwt_verify(Str token, uint8_t const *key, size_t key_len, int64_t now, Jwt_
     Str_Builder expected;
     str_builder_init(&expected, expected_buf, sizeof expected_buf);
     Str signing_input = str_make(token.data, header.len + 1 + payload_b64.len);
-    if (!sign(&expected, signing_input, key, key_len) ||
+    if (!sign(&expected, signing_input, key) ||
         !str_eq_constant_time(str_builder_str(&expected), signature)) {
         return false;
     }

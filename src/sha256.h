@@ -9,8 +9,12 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define SHA256_DIGEST_SIZE 32
-#define SHA256_BLOCK_SIZE  64
+enum {
+    /** Size of a SHA-256 digest, in bytes. */
+    SHA256_DIGEST_SIZE = 32,
+    /** Size of one SHA-256 input block, in bytes. */
+    SHA256_BLOCK_SIZE = 64,
+};
 
 typedef struct {
     uint32_t state[8];

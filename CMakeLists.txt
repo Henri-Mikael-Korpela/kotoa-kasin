@@ -9,6 +9,13 @@ if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
   set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
 endif()
 
+# The compiler checks the C rules of CLAUDE.md it can: no information lost by an implicit
+# conversion, no hidden shadowing, every function declared before use and const kept.
+set(KASIN_WARNINGS
+  -Wall -Wextra -Wpedantic
+  -Wconversion -Wsign-conversion -Wshadow
+  -Wmissing-prototypes -Wstrict-prototypes -Wcast-qual)
+
 # Memory is reserved once at startup from these values:
 #   total ~= threads * (conns_per_worker * (req_buf + resp_buf + sizeof(Conn))
 #                       + big_bufs_per_worker * big_buf) + db_heap
@@ -36,7 +43,7 @@ add_executable(kasin-httpd
   src/sha256.c
   src/sql.c
   src/str.c)
-target_compile_options(kasin-httpd PRIVATE -Wall -Wextra -Wpedantic)
+target_compile_options(kasin-httpd PRIVATE ${KASIN_WARNINGS})
 target_compile_definitions(kasin-httpd PRIVATE
   MAX_CONNS_PER_WORKER=${KASIN_MAX_CONNS_PER_WORKER}
   REQ_BUF_SIZE=${KASIN_REQ_BUF_SIZE}
@@ -52,14 +59,14 @@ add_executable(kasin-passwd
   src/password.c
   src/sha256.c
   src/str.c)
-target_compile_options(kasin-passwd PRIVATE -Wall -Wextra -Wpedantic)
+target_compile_options(kasin-passwd PRIVATE ${KASIN_WARNINGS})
 
 # Makes the server's country file from DB-IP's CSV (see scripts/fetch-geoip).
 add_executable(kasin-geoip
   src/geoip_tool.c
   src/geoip_build.c
   src/str.c)
-target_compile_options(kasin-geoip PRIVATE -Wall -Wextra -Wpedantic)
+target_compile_options(kasin-geoip PRIVATE ${KASIN_WARNINGS})
 
 # Build the bundles in public/js and public/css from the sources in js/ and css/
 # (see js/bundles.txt and css/bundles.txt). bundler.c is what they share.
@@ -69,7 +76,7 @@ add_executable(kasin-jsbundle
   src/bundler.c
   src/arena.c
   src/str.c)
-target_compile_options(kasin-jsbundle PRIVATE -Wall -Wextra -Wpedantic)
+target_compile_options(kasin-jsbundle PRIVATE ${KASIN_WARNINGS})
 
 add_executable(kasin-cssbundle
   src/cssbundle.c
@@ -77,21 +84,21 @@ add_executable(kasin-cssbundle
   src/bundler.c
   src/arena.c
   src/str.c)
-target_compile_options(kasin-cssbundle PRIVATE -Wall -Wextra -Wpedantic)
+target_compile_options(kasin-cssbundle PRIVATE ${KASIN_WARNINGS})
 
 enable_testing()
 add_executable(jsmin-test
   tests/jsmin_test.c
   src/jsmin.c
   src/str.c)
-target_compile_options(jsmin-test PRIVATE -Wall -Wextra -Wpedantic)
+target_compile_options(jsmin-test PRIVATE ${KASIN_WARNINGS})
 add_test(NAME jsmin COMMAND jsmin-test)
 
 add_executable(cssmin-test
   tests/cssmin_test.c
   src/cssmin.c
   src/str.c)
-target_compile_options(cssmin-test PRIVATE -Wall -Wextra -Wpedantic)
+target_compile_options(cssmin-test PRIVATE ${KASIN_WARNINGS})
 add_test(NAME cssmin COMMAND cssmin-test)
 
 add_executable(password-test
@@ -99,7 +106,7 @@ add_executable(password-test
   src/password.c
   src/sha256.c
   src/str.c)
-target_compile_options(password-test PRIVATE -Wall -Wextra -Wpedantic)
+target_compile_options(password-test PRIVATE ${KASIN_WARNINGS})
 add_test(NAME password COMMAND password-test)
 
 add_executable(login-guard-test
@@ -107,7 +114,7 @@ add_executable(login-guard-test
   src/login_guard.c
   src/ip.c
   src/str.c)
-target_compile_options(login-guard-test PRIVATE -Wall -Wextra -Wpedantic)
+target_compile_options(login-guard-test PRIVATE ${KASIN_WARNINGS})
 target_link_libraries(login-guard-test PRIVATE Threads::Threads)
 add_test(NAME login-guard COMMAND login-guard-test)
 
@@ -117,5 +124,5 @@ add_executable(geoip-test
   src/geoip_build.c
   src/ip.c
   src/str.c)
-target_compile_options(geoip-test PRIVATE -Wall -Wextra -Wpedantic)
+target_compile_options(geoip-test PRIVATE ${KASIN_WARNINGS})
 add_test(NAME geoip COMMAND geoip-test)

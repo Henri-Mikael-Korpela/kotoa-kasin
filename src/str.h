@@ -29,9 +29,9 @@ typedef struct {
 } Str_Builder;
 
 /**
- * Returned by the search functions when nothing was found.
+ * Returned by the search functions when nothing was found: an index no string has.
  */
-#define STR_NPOS SIZE_MAX
+static size_t const STR_NPOS = SIZE_MAX;
 
 /**
  * Initializer for a Str from a string literal, usable in static initializers.

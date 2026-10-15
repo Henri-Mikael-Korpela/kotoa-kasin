@@ -51,6 +51,7 @@ bool js_minify(Str source, Str_Builder *out, Minify_Error *error);
  *              there are more names than fit.
  * @return True on success.
  */
-bool js_top_level_names(Str source, Js_Name *names, size_t capacity, size_t *count, Minify_Error *error);
+bool js_top_level_names(Str source, Js_Name *names, size_t capacity, size_t *count,
+                        Minify_Error *error);
 
 #endif  // __KASIN_JSMIN_H__

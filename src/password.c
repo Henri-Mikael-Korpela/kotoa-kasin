@@ -1,5 +1,6 @@
 #include "password.h"
 
+#include <assert.h>
 #include <string.h>
 #include <sys/random.h>
 
@@ -17,6 +18,7 @@ typedef struct {
 } Hmac_Key;
 
 static void hmac_key_init(Hmac_Key *k, Str key) {
+    assert(k != NULL);
     uint8_t block[SHA256_BLOCK_SIZE];
     memset(block, 0, sizeof block);
     if (key.len > SHA256_BLOCK_SIZE) {
@@ -41,7 +43,9 @@ static void hmac_key_init(Hmac_Key *k, Str key) {
     sha256_update(&k->outer, pad, sizeof pad);
 }
 
-static void hmac_with_key(Hmac_Key const *k, void const *msg, size_t msg_len, uint8_t out[SHA256_DIGEST_SIZE]) {
+static void hmac_with_key(Hmac_Key const *k, void const *msg, size_t msg_len,
+                          uint8_t out[SHA256_DIGEST_SIZE]) {
+    assert(out != NULL);
     Sha256 ctx = k->inner;
     sha256_update(&ctx, msg, msg_len);
     uint8_t inner_hash[SHA256_DIGEST_SIZE];
@@ -53,6 +57,8 @@ static void hmac_with_key(Hmac_Key const *k, void const *msg, size_t msg_len, ui
 
 void pbkdf2_sha256(Str password, uint8_t const *salt, size_t salt_len, uint32_t iterations,
                    uint8_t out[SHA256_DIGEST_SIZE]) {
+    assert(salt != NULL);
+    assert(out != NULL);
     Hmac_Key key;
     hmac_key_init(&key, password);
 
@@ -83,6 +89,7 @@ void pbkdf2_sha256(Str password, uint8_t const *salt, size_t salt_len, uint32_t 
 }
 
 bool password_hash_create(Str password, uint32_t iterations, Password_Hash *out) {
+    assert(out != NULL);
     if (iterations < PASSWORD_MIN_ITERATIONS || iterations > PASSWORD_MAX_ITERATIONS) {
         return false;
     }
@@ -105,6 +112,7 @@ static int hex_value(char c) {
 }
 
 static bool parse_hex(Str text, uint8_t *out, size_t size) {
+    assert(out != NULL);
     if (text.len != size * 2) {
         return false;
     }
@@ -120,6 +128,7 @@ static bool parse_hex(Str text, uint8_t *out, size_t size) {
 }
 
 static void append_hex(Str_Builder *out, uint8_t const *bytes, size_t size) {
+    assert(out != NULL);
     for (size_t i = 0; i < size; i++) {
         str_builder_append_char(out, HEX_DIGITS.data[bytes[i] >> 4]);
         str_builder_append_char(out, HEX_DIGITS.data[bytes[i] & 15]);
@@ -127,6 +136,7 @@ static void append_hex(Str_Builder *out, uint8_t const *bytes, size_t size) {
 }
 
 bool password_hash_parse(Str text, Password_Hash *out) {
+    assert(out != NULL);
     if (!str_starts_with(text, PREFIX)) {
         return false;
     }
@@ -152,6 +162,7 @@ bool password_hash_parse(Str text, Password_Hash *out) {
 }
 
 bool password_hash_format(Password_Hash const *hash, Str_Builder *out) {
+    assert(out != NULL);
     str_builder_append(out, PREFIX);
     str_builder_append_u64(out, hash->iterations);
     str_builder_append_char(out, ':');

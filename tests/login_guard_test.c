@@ -50,9 +50,11 @@ int main(void) {
     // The waits.
     check("no wait for 3 failures", login_guard_wait(0) == 0 && login_guard_wait(3) == 0);
     check("2 s after the 4th", login_guard_wait(4) == 2);
-    check("doubling", login_guard_wait(5) == 4 && login_guard_wait(6) == 8 && login_guard_wait(8) == 32);
+    check("doubling",
+          login_guard_wait(5) == 4 && login_guard_wait(6) == 8 && login_guard_wait(8) == 32);
     check("capped at 60 s", login_guard_wait(9) == 60);
-    check("banned at 10", login_guard_wait(10) == LOGIN_BAN_SEC && login_guard_wait(500) == LOGIN_BAN_SEC);
+    check("banned at 10",
+          login_guard_wait(10) == LOGIN_BAN_SEC && login_guard_wait(500) == LOGIN_BAN_SEC);
 
     int64_t now = 1000000;
     login_guard_init(&GUARD, now);
@@ -65,29 +67,35 @@ int main(void) {
     check("3 failures: may try at once", d.verdict == LOGIN_ALLOWED && d.failures == 3);
     now += 60;  // Let the checks of the minute refill.
     d = fail_times(&attacker, 1, &now);
-    check("4th failure: wait 2 s", d.verdict == LOGIN_DELAYED && d.retry_after == 2 && d.failures == 4);
+    check("4th failure: wait 2 s",
+          d.verdict == LOGIN_DELAYED && d.retry_after == 2 && d.failures == 4);
     d = login_guard_check(&GUARD, &attacker, now + 1);
     check("refused within the wait", d.verdict == LOGIN_DELAYED && d.retry_after == 1);
     check("first refusal is logged", d.log_refusal && d.refused == 1);
     d = login_guard_check(&GUARD, &attacker, now + 1);
     check("second refusal within a minute is not logged", !d.log_refusal);
-    check("other addresses are not affected", login_guard_check(&GUARD, &admin, now + 1).verdict == LOGIN_ALLOWED);
+    check("other addresses are not affected",
+          login_guard_check(&GUARD, &admin, now + 1).verdict == LOGIN_ALLOWED);
     d = login_guard_check(&GUARD, &attacker, now + 2);
     check("allowed after the wait", d.verdict == LOGIN_ALLOWED);
 
     // Banned after 10 failures, for LOGIN_BAN_SEC.
     now += 120;
     d = fail_times(&attacker, 6, &now);
-    check("10th failure: banned", d.verdict == LOGIN_BANNED && d.failures == 10 && d.retry_after == LOGIN_BAN_SEC);
+    check("10th failure: banned",
+          d.verdict == LOGIN_BANNED && d.failures == 10 && d.retry_after == LOGIN_BAN_SEC);
     int64_t const banned_at = now;
     d = login_guard_check(&GUARD, &attacker, banned_at + LOGIN_BAN_SEC - 1);
     check("still banned just before the end", d.verdict == LOGIN_BANNED && d.retry_after == 1);
     Login_Block blocks[4];
     size_t count = login_guard_blocks(&GUARD, banned_at + 10, blocks, 4);
-    check("listed as banned", count == 1 && ip_eq(&blocks[0].ip, &attacker) && blocks[0].banned &&
-                              blocks[0].until == banned_at + LOGIN_BAN_SEC && blocks[0].failures == 10);
+    check("listed as banned", count == 1 && ip_eq(&blocks[0].ip, &attacker) &&
+                              blocks[0].banned &&
+                              blocks[0].until == banned_at + LOGIN_BAN_SEC &&
+                              blocks[0].failures == 10);
     d = login_guard_check(&GUARD, &attacker, banned_at + LOGIN_BAN_SEC);
-    check("ban over: allowed with failures forgotten", d.verdict == LOGIN_ALLOWED && d.failures == 0);
+    check("ban over: allowed with failures forgotten",
+          d.verdict == LOGIN_ALLOWED && d.failures == 0);
     count = login_guard_blocks(&GUARD, banned_at + LOGIN_BAN_SEC, blocks, 4);
     check("no longer listed", count == 0);
 
@@ -109,7 +117,8 @@ int main(void) {
     d = login_guard_check(&GUARD, &attacker, now);
     check("restored ban", d.verdict == LOGIN_BANNED && d.retry_after == LOGIN_BAN_SEC - 100);
     login_guard_restore(&GUARD, &admin, 2, now - 5);
-    check("restored few failures: allowed", login_guard_check(&GUARD, &admin, now).verdict == LOGIN_ALLOWED);
+    check("restored few failures: allowed",
+          login_guard_check(&GUARD, &admin, now).verdict == LOGIN_ALLOWED);
 
     // At most LOGIN_CHECKS_PER_MINUTE password checks a minute from everyone.
     login_guard_init(&GUARD, now);
@@ -128,7 +137,8 @@ int main(void) {
         }
     }
     check("only the minute's checks are allowed", allowed == LOGIN_CHECKS_PER_MINUTE);
-    check("then busy, with a wait", d.verdict == LOGIN_BUSY && d.retry_after >= 1 && d.retry_after <= 60);
+    check("then busy, with a wait",
+          d.verdict == LOGIN_BUSY && d.retry_after >= 1 && d.retry_after <= 60);
     d = login_guard_check(&GUARD, &admin, now + 60 / LOGIN_CHECKS_PER_MINUTE);
     check("one more check after its period", d.verdict == LOGIN_ALLOWED);
     d = login_guard_check(&GUARD, &admin, now + 60 / LOGIN_CHECKS_PER_MINUTE);

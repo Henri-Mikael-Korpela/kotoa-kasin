@@ -25,11 +25,18 @@
 #include "sha256.h"
 #include "str.h"
 
-#define PASSWORD_SALT_SIZE          16
-#define PASSWORD_DEFAULT_ITERATIONS 600000  /**< OWASP's recommendation for PBKDF2-HMAC-SHA256. */
-#define PASSWORD_MIN_ITERATIONS     100000
-#define PASSWORD_MAX_ITERATIONS     10000000
-#define PASSWORD_HASH_TEXT_SIZE     160  /**< Room for the text form, with its terminator. */
+enum {
+    /** Size of the random salt, in bytes. */
+    PASSWORD_SALT_SIZE = 16,
+    /** Iterations of a new hash: OWASP's recommendation for PBKDF2-HMAC-SHA256. */
+    PASSWORD_DEFAULT_ITERATIONS = 600000,
+    /** Fewest iterations a hash may have, so a weak hash is never accepted. */
+    PASSWORD_MIN_ITERATIONS = 100000,
+    /** Most iterations a hash may have, so a login cannot be made to take forever. */
+    PASSWORD_MAX_ITERATIONS = 10000000,
+    /** Room for the text form of a hash with its terminator, in bytes. */
+    PASSWORD_HASH_TEXT_SIZE = 160,
+};
 
 typedef struct {
     uint32_t iterations;

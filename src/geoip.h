@@ -31,12 +31,19 @@
 
 #include "ip.h"
 
-#define GEOIP_MAGIC "KGEOIP1\n"
-#define GEOIP_MAGIC_SIZE 8
-#define GEOIP_HEADER_SIZE (GEOIP_MAGIC_SIZE + 8)
+enum {
+    /** Length of the file's identifying first bytes, in bytes. */
+    GEOIP_MAGIC_SIZE = 8,
+    /** Length of the header: the identifying bytes and the two counts, in bytes. */
+    GEOIP_HEADER_SIZE = GEOIP_MAGIC_SIZE + 8,
+};
+
+/** The first bytes of a country file; GEOIP_MAGIC_SIZE long. */
+static Str const GEOIP_MAGIC = STR_INIT("KGEOIP1\n");
 
 typedef struct {
     uint8_t const *map;  /**< The mapped file, or NULL when no data is loaded. */
+    void          *region;  /**< The same mapping, as munmap() takes it. */
     size_t         map_size;
     uint32_t       v4_count;
     uint32_t       v6_count;

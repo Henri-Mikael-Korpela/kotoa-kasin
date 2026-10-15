@@ -1,5 +1,6 @@
 #include "db.h"
 
+#include <assert.h>
 #include <stdio.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -8,7 +9,14 @@
 #include "migrate.h"
 #include "sql.h"
 
-#define MAX_FILE_PATH 1024
+enum {
+    /** Longest database path, with its terminator, in bytes. */
+    MAX_FILE_PATH = 1024,
+    /** Login attempts and clients are kept this long, in seconds (90 days). */
+    LOGIN_RETENTION_SEC = 90 * 24 * 60 * 60,
+    /** Largest JSON request body that is looked into, in bytes. */
+    MAX_JSON_SIZE = 1024 * 1024,
+};
 
 static Buddy_Heap DB_HEAP;
 
@@ -85,6 +93,7 @@ static char const *vfs_for(Db_Storage storage) {
 }
 
 static bool open_connection(sqlite3 **conn, Str path, Db_Storage storage) {
+    assert(conn != NULL);
     char path_z[MAX_FILE_PATH];  // sqlite3_open_v2() needs a NUL-terminated path.
     if (!str_to_cstr(path, path_z, sizeof path_z)) {
         fprintf(stderr, "db: database path is empty or too long\n");
@@ -158,6 +167,12 @@ bool db_prepare_file(Str path, Db_Storage storage, Str migrations_dir) {
     return ok;
 }
 
+/*
+ * The macros below build SQL text. They have to be macros: the compiler joins
+ * adjacent string literals into one statement, which a constant array of
+ * characters cannot do.
+ */
+
 /**
  * SQL for a field taken from the JSON in parameter ?param: its value when it
  * is a JSON string, missing_value when the key is absent, and NULL (which NOT
@@ -216,6 +231,7 @@ bool db_prepare_file(Str path, Db_Storage storage, Str migrations_dir) {
     "(SELECT json_group_array(json_object('id', u.id, 'name', u.name)) FROM" \
     " (SELECT id, name FROM recipes" IMAGE_IS_USED_BY_RECIPE " ORDER BY name) u)"
 
+// A category with the number of recipes in it, in the shape the API returns.
 #define CATEGORY_JSON                                                    \
     "json_object('id', c.id, 'name', c.name, 'recipe_count',"            \
     " (SELECT count(*) FROM recipes WHERE category_id = c.id))"
@@ -249,6 +265,7 @@ static bool prepare(Db *db, sqlite3_stmt **stmt, Str sql) {
 }
 
 bool db_open(Db *db, Str path, Db_Storage storage) {
+    assert(db != NULL);
     *db = (Db) {
         .conn = NULL,
         .is_json_object = NULL,
@@ -277,7 +294,8 @@ bool db_open(Db *db, Str path, Db_Storage storage) {
         .recent_login_failures = NULL,
         .clear_login_client = NULL,
     };
-    if (!open_connection(&db->conn, path, storage) || !sql_exec(db->conn, STR("PRAGMA foreign_keys = ON;"), STR("enabling foreign keys"))) {
+    if (!open_connection(&db->conn, path, storage) ||
+        !sql_exec(db->conn, STR("PRAGMA foreign_keys = ON;"), STR("enabling foreign keys"))) {
         db_close(db);
         return false;
     }
@@ -319,7 +337,8 @@ bool db_open(Db *db, Str path, Db_Storage storage) {
         prepare(db, &db->get_category,
                 STR("SELECT " CATEGORY_JSON " FROM categories c WHERE c.id = ?1")) &&
         prepare(db, &db->insert_category,
-                STR("INSERT INTO categories (name) VALUES (trim(" TEXT_FIELD("1", "name", "NULL") "))"
+                STR("INSERT INTO categories (name) VALUES (trim("
+                TEXT_FIELD("1", "name", "NULL") "))"
                 " RETURNING id")) &&
         prepare(db, &db->update_category,
                 STR("UPDATE categories SET name = trim(" TEXT_FIELD("2", "name", "NULL") ")"
@@ -350,7 +369,8 @@ bool db_open(Db *db, Str path, Db_Storage storage) {
                 STR("INSERT INTO login_attempts (client_id, at, username, user_agent, succeeded)"
                 " VALUES (?1, ?2, ?3, ?4, ?5)")) &&
         prepare(db, &db->prune_login_attempts, STR("DELETE FROM login_attempts WHERE at < ?1")) &&
-        prepare(db, &db->prune_login_clients, STR("DELETE FROM login_clients WHERE last_seen < ?1")) &&
+        prepare(db, &db->prune_login_clients,
+                STR("DELETE FROM login_clients WHERE last_seen < ?1")) &&
         prepare(db, &db->login_report, STR(LOGIN_REPORT_SQL)) &&
         prepare(db, &db->recent_login_failures,
                 STR("SELECT c.ip, count(*), max(a.at)"
@@ -439,7 +459,7 @@ static void finish(sqlite3_stmt *stmt) {
 }
 
 static Db_Status check_json_object(Db *db, Str json) {
-    if (json.len > 1024 * 1024 || !sql_bind_str(db->is_json_object, 1, json)) {
+    if (json.len > MAX_JSON_SIZE || !sql_bind_str(db->is_json_object, 1, json)) {
         finish(db->is_json_object);
         return DB_INVALID;
     }
@@ -456,6 +476,7 @@ static Db_Status check_json_object(Db *db, Str json) {
 
 // Appends the single text column of a one-row query.
 static Db_Status append_text_result(sqlite3_stmt *stmt, Str_Builder *out) {
+    assert(out != NULL);
     int rc = sqlite3_step(stmt);
     Db_Status status;
     if (rc == SQLITE_ROW) {
@@ -474,6 +495,7 @@ static Db_Status append_text_result(sqlite3_stmt *stmt, Str_Builder *out) {
 }
 
 static Db_Status get_json(sqlite3_stmt *stmt, int64_t id, Str_Builder *out) {
+    assert(out != NULL);
     sqlite3_bind_int64(stmt, 1, id);
     return append_text_result(stmt, out);
 }
@@ -528,14 +550,17 @@ static Db_Status delete_row(Db *db, sqlite3_stmt *stmt, int64_t id, Db_Status (*
 }
 
 Db_Status db_list_recipes_json(Db *db, Str_Builder *out) {
+    assert(out != NULL);
     return append_text_result(db->list_recipes, out);
 }
 
 Db_Status db_get_recipe_json(Db *db, int64_t id, Str_Builder *out) {
+    assert(out != NULL);
     return get_json(db->get_recipe, id, out);
 }
 
 Db_Status db_get_recipe_by_slug_json(Db *db, Str slug, Str_Builder *out) {
+    assert(out != NULL);
     if (!sql_bind_str(db->get_recipe_by_slug, 1, slug)) {
         finish(db->get_recipe_by_slug);
         return DB_ERROR;
@@ -544,6 +569,7 @@ Db_Status db_get_recipe_by_slug_json(Db *db, Str slug, Str_Builder *out) {
 }
 
 Db_Status db_recipe_slug_exists(Db *db, Str slug, bool *exists) {
+    assert(exists != NULL);
     sqlite3_stmt *stmt = db->find_recipe_slug;
     Db_Status status = DB_OK;
     if (!sql_bind_str(stmt, 1, slug)) {
@@ -561,6 +587,7 @@ Db_Status db_recipe_slug_exists(Db *db, Str slug, bool *exists) {
 }
 
 Db_Status db_create_recipe(Db *db, Str json, int64_t *id) {
+    assert(id != NULL);
     return insert_from_json(db, db->insert_recipe, json, id, recipe_status_from);
 }
 
@@ -573,14 +600,17 @@ Db_Status db_delete_recipe(Db *db, int64_t id) {
 }
 
 Db_Status db_list_categories_json(Db *db, Str_Builder *out) {
+    assert(out != NULL);
     return append_text_result(db->list_categories, out);
 }
 
 Db_Status db_get_category_json(Db *db, int64_t id, Str_Builder *out) {
+    assert(out != NULL);
     return get_json(db->get_category, id, out);
 }
 
 Db_Status db_create_category(Db *db, Str json, int64_t *id) {
+    assert(id != NULL);
     return insert_from_json(db, db->insert_category, json, id, category_status_from);
 }
 
@@ -593,10 +623,12 @@ Db_Status db_delete_category(Db *db, int64_t id) {
 }
 
 Db_Status db_list_images_json(Db *db, Str_Builder *out) {
+    assert(out != NULL);
     return append_text_result(db->list_images, out);
 }
 
 Db_Status db_create_image(Db *db, Str extension, Str original_name, int64_t size, int64_t *id) {
+    assert(id != NULL);
     sqlite3_stmt *stmt = db->insert_image;
     if (!sql_bind_str(stmt, 1, extension) || !sql_bind_str(stmt, 2, original_name) ||
         sqlite3_bind_int64(stmt, 3, size) != SQLITE_OK) {
@@ -614,6 +646,7 @@ Db_Status db_create_image(Db *db, Str extension, Str original_name, int64_t size
 }
 
 Db_Status db_delete_image(Db *db, int64_t id, Str_Builder *file_name) {
+    assert(file_name != NULL);
     sqlite3_stmt *find = db->find_image;
     sqlite3_bind_int64(find, 1, id);
     int rc = sqlite3_step(find);
@@ -648,6 +681,8 @@ static bool append_text_column(sqlite3_stmt *stmt, int column, Str_Builder *out)
 }
 
 Db_Status db_parse_login(Db *db, Str json, Str_Builder *username, Str_Builder *password) {
+    assert(username != NULL);
+    assert(password != NULL);
     Db_Status status = check_json_object(db, json);
     if (status != DB_OK) {
         return status;
@@ -665,8 +700,6 @@ Db_Status db_parse_login(Db *db, Str json, Str_Builder *username, Str_Builder *p
     finish(db->parse_login);
     return status;
 }
-
-#define LOGIN_RETENTION_SEC (90 * 24 * 60 * 60)
 
 // Runs a statement that returns no rows, with its parameters already bound.
 static int run(sqlite3_stmt *stmt) {
@@ -696,7 +729,8 @@ static Db_Status record_login_steps(Db *db, Db_Login_Attempt const *attempt) {
     sqlite3_stmt *insert = db->insert_login_attempt;
     if (sqlite3_bind_int64(insert, 1, client_id) != SQLITE_OK ||
         sqlite3_bind_int64(insert, 2, attempt->at) != SQLITE_OK ||
-        !sql_bind_str(insert, 3, attempt->username) || !sql_bind_str(insert, 4, attempt->user_agent) ||
+        !sql_bind_str(insert, 3, attempt->username) ||
+        !sql_bind_str(insert, 4, attempt->user_agent) ||
         sqlite3_bind_int(insert, 5, attempt->succeeded ? 1 : 0) != SQLITE_OK) {
         finish(insert);
         return DB_ERROR;
@@ -729,25 +763,27 @@ Db_Status db_record_login(Db *db, Db_Login_Attempt const *attempt) {
 }
 
 Db_Status db_login_report_json(Db *db, Str_Builder *out) {
+    assert(out != NULL);
     return append_text_result(db->login_report, out);
 }
 
-Db_Status db_recent_login_failures(Db *db, int64_t since,
-                                   void (*each)(void *context, Str ip, uint32_t failures, int64_t last_failure),
+Db_Status db_recent_login_failures(Db *db, int64_t since, Db_Failure_Callback each,
                                    void *context) {
+    assert(each != NULL);
     sqlite3_stmt *stmt = db->recent_login_failures;
     sqlite3_bind_int64(stmt, 1, since);
     int rc;
     while ((rc = sqlite3_step(stmt)) == SQLITE_ROW) {
         int64_t const failures = sqlite3_column_int64(stmt, 1);
-        each(context, sql_column_str(stmt, 0), failures > UINT32_MAX ? UINT32_MAX : (uint32_t)failures,
-             sqlite3_column_int64(stmt, 2));
+        uint32_t const count = failures > UINT32_MAX ? UINT32_MAX : (uint32_t)failures;
+        each(context, sql_column_str(stmt, 0), count, sqlite3_column_int64(stmt, 2));
     }
     finish(stmt);
     return rc == SQLITE_DONE ? DB_OK : status_from(rc);
 }
 
 Db_Status db_clear_login_client(Db *db, int64_t id, int64_t now, Str_Builder *ip) {
+    assert(ip != NULL);
     sqlite3_stmt *stmt = db->clear_login_client;
     sqlite3_bind_int64(stmt, 1, id);
     sqlite3_bind_int64(stmt, 2, now);

@@ -35,14 +35,24 @@
 
 #include "ip.h"
 
-#define LOGIN_GUARD_SLOTS       4096
-#define LOGIN_FREE_FAILURES     3
-#define LOGIN_MAX_DELAY_SEC     60
-#define LOGIN_BAN_FAILURES      10
-#define LOGIN_BAN_SEC           (15 * 60)
-#define LOGIN_WINDOW_SEC        (15 * 60)
-#define LOGIN_CHECKS_PER_MINUTE 6
-#define LOGIN_REFUSAL_LOG_SEC   60  /**< Refusals are logged at most this often per address. */
+enum {
+    /** Number of addresses tracked at once. */
+    LOGIN_GUARD_SLOTS = 4096,
+    /** Failures that cost nothing, in a row. */
+    LOGIN_FREE_FAILURES = 3,
+    /** Longest wait between two attempts, in seconds. */
+    LOGIN_MAX_DELAY_SEC = 60,
+    /** Failures, in a row, after which an address is banned. */
+    LOGIN_BAN_FAILURES = 10,
+    /** Length of a ban, in seconds. */
+    LOGIN_BAN_SEC = 15 * 60,
+    /** Failures are forgotten this long after the last one, in seconds. */
+    LOGIN_WINDOW_SEC = 15 * 60,
+    /** Password checks allowed per minute, from all addresses together. */
+    LOGIN_CHECKS_PER_MINUTE = 6,
+    /** A refusal is logged at most this often per address, in seconds. */
+    LOGIN_REFUSAL_LOG_SEC = 60,
+};
 
 typedef enum {
     LOGIN_ALLOWED,
@@ -55,7 +65,7 @@ typedef struct {
     Login_Verdict verdict;
     int64_t       retry_after;  /**< Seconds until another attempt may be made; 0 when allowed. */
     uint32_t      failures;     /**< The address's recent failures. */
-    bool          log_refusal;  /**< Whether this refusal should be logged (see LOGIN_REFUSAL_LOG_SEC). */
+    bool          log_refusal;  /**< Whether to log this refusal (see LOGIN_REFUSAL_LOG_SEC). */
     uint32_t      refused;      /**< Refusals since the last logged one, this one included. */
 } Login_Decision;
 
@@ -117,7 +127,8 @@ void login_guard_succeeded(Login_Guard *g, Ip_Address const *ip);
  * Restores an address's failures, read back from the database at startup, so
  * waits and bans survive a restart.
  */
-void login_guard_restore(Login_Guard *g, Ip_Address const *ip, uint32_t failures, int64_t last_failure);
+void login_guard_restore(Login_Guard *g, Ip_Address const *ip, uint32_t failures,
+                         int64_t last_failure);
 
 /**
  * Lifts an address's wait or ban (the admin's "unblock").
