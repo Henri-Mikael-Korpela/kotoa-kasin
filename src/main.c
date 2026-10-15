@@ -2069,7 +2069,7 @@ int main(int argc, char **argv) {
     Str password_hash = str_from_cstr(getenv("KASIN_ADMIN_PASSWORD_HASH"));
     if (password_hash.len == 0) {
         fprintf(stderr, "warning: KASIN_ADMIN_PASSWORD_HASH is not set, so nobody can log in; "
-                        "make one with kasin-passwd (see README.md)\n");
+                        "make one with kasin-passwd (see docs/admin-password.md)\n");
     } else if (password_hash_parse(str_trim(password_hash), &ADMIN_PASSWORD_HASH)) {
         LOGIN_ENABLED = true;
     } else {

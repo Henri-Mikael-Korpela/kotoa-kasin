@@ -8,7 +8,7 @@
 #   docker compose -f dev.docker-compose.yml exec httpd /build/kasin-passwd
 # in a file named .env next to this one (never committed), then restart. Without
 # it the site runs but nobody can log in.
-# Deploy to Azure with:  docker exec -it kotoa-kasin-deploy deploy  (see README.md)
+# Deploy to Azure with:  docker exec -it kotoa-kasin-deploy deploy  (see docs/deployment.md)
 services:
   httpd:
     build:
