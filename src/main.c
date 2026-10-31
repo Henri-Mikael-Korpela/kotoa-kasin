@@ -106,7 +106,7 @@ enum {
     /** Alignment of buffers, in bytes: one cache line. */
     CACHE_LINE = 64,
     /** Size of a memory page, in bytes. */
-    PAGE_SIZE = 4096,
+    MEMORY_PAGE_SIZE = 4096,
     /** Most blocked addresses shown in the login report. */
     MAX_REPORTED_BLOCKS = 500,
 };
@@ -2218,7 +2218,7 @@ static size_t reserved_bytes(long workers) {
                               (size_t)MAX_CONNS_PER_WORKER * RESP_BUF_SIZE +
                               big_bytes;
     return arena_align_up(per_worker * (size_t)workers + DB_HEAP_SIZE + (size_t)CACHE_LINE * 8,
-                          PAGE_SIZE);
+                          MEMORY_PAGE_SIZE);
 }
 
 /**
