@@ -13,6 +13,6 @@
 | `public/` | The site: pages, `assets/`, and the generated bundles in `js/` and `css/`; `hallinta/` holds the admin pages |
 | `Dockerfile` | Production image (used for Azure) |
 | `Dockerfile.dev`, `dev.docker-compose.yml` | Local development and the deployment tooling container |
-| `deploy/` | `bin/deploy` (the deployment script), `config.env` (its settings) and `secrets.env` (the live admin password hash; not in version control) |
+| `deploy/` | `bin/deploy` (the deployment script), `config.env` (its settings), `config.local.env` (your subscription and tenant; not in version control) and `secrets.env` (the live admin password hash; not in version control) |
 | `docs/` | This documentation; the index is `README.md` |
 | `CLAUDE.md` | C and JavaScript code style rules for this project |

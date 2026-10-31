@@ -36,9 +36,9 @@ per address, so attacks show in `az containerapp logs show` (and locally in
 `docker compose -f dev.docker-compose.yml logs -f httpd`):
 
 ```
-login: FAILED for "admin" from 193.166.3.2 (FI); 4 recent failures, next attempt allowed in 2 s
-login: refused attempt from 193.166.3.2 (FI): must wait after 4 failures, 2 s more (1 refused since the last such line)
-login: success for "hanna" from 87.95.0.1 (FI)
+login: FAILED for "admin" from 203.0.113.7 (FI); 4 recent failures, next attempt allowed in 2 s
+login: refused attempt from 203.0.113.7 (FI): must wait after 4 failures, 2 s more (1 refused since the last such line)
+login: success for "<admin user name>" from 198.51.100.4 (FI)
 ```
 
 **Kirjautumiset** (`/hallinta/kirjautumiset`) shows the addresses that must

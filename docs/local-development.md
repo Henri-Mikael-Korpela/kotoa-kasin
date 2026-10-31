@@ -11,7 +11,7 @@ docker compose -f dev.docker-compose.yml up --build
 Then open <http://localhost:8080>.
 
 The admin view is at
-<http://localhost:8080/hallinta>, with the user name `hanna`. You need to set the password yourself. Until you do, the site runs but nobody can log in. Here are the steps to set the password:
+<http://localhost:8080/hallinta>, with the admin user name (`ADMIN_USERNAME` in `src/main.c`). You need to set the password yourself. Until you do, the site runs but nobody can log in. Here are the steps to set the password:
 
 1. Make the password hash into a file named `.env` next to
    `dev.docker-compose.yml` in project root. You can either create a password automatically or choose one yourself. To generate a password automatically, run the following Powershell command:

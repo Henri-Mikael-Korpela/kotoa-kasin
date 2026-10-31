@@ -2,7 +2,7 @@
 
 # Admin password
 
-The admin logs in as `hanna` with a password that is never stored anywhere:
+The admin logs in with a fixed user name (`ADMIN_USERNAME` in `src/main.c`) and a password that is never stored anywhere:
 the server only knows a salted, slow hash of it (PBKDF2-HMAC-SHA256, 600,000
 iterations, a random 16-byte salt), given in the environment variable
 `KASIN_ADMIN_PASSWORD_HASH`:

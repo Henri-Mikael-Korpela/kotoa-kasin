@@ -8,3 +8,8 @@ public/css/
 # stays out of version control.
 .env
 deploy/secrets.env
+
+# Personal deployment settings (AZURE_SUBSCRIPTION, AZURE_TENANT) that override
+# deploy/config.env. They identify your Azure account, so they stay out of
+# version control.
+deploy/config.local.env

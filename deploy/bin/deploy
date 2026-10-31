@@ -9,12 +9,13 @@
 # container registry, storage for the database, Container Apps environment and
 # the app); later runs only build a new image and roll the app over to it.
 #
-# Settings: deploy/config.env.
+# Settings: deploy/config.env, overridden by deploy/config.local.env.
 
 set -euo pipefail
 
 REPO_DIR=${REPO_DIR:-/workspace}
 CONFIG_FILE="$REPO_DIR/deploy/config.env"
+LOCAL_CONFIG_FILE="$REPO_DIR/deploy/config.local.env"
 
 usage() {
     cat <<'EOF'
@@ -22,7 +23,8 @@ usage: deploy [--help]
 
 Builds the server image in Azure and deploys it to Azure Container Apps.
 Signs in to Azure first if needed (device code: open the shown link on any device).
-Settings are read from deploy/config.env.
+Settings are read from deploy/config.env, then from deploy/config.local.env (not
+committed) if it exists, so a value in the local file wins.
 
 The admin password hash is read from KASIN_ADMIN_PASSWORD_HASH in
 deploy/secrets.env (or the environment) and stored as a Container Apps secret.
@@ -50,6 +52,10 @@ step() {
 
 # shellcheck source-path=SCRIPTDIR source=../config.env
 . "$CONFIG_FILE"
+if [ -f "$LOCAL_CONFIG_FILE" ]; then
+    # shellcheck source=/dev/null
+    . "$LOCAL_CONFIG_FILE"
+fi
 
 SECRETS_FILE="$REPO_DIR/deploy/secrets.env"
 HASH_PATTERN='^pbkdf2-sha256:[0-9]+:[0-9a-f]{32}:[0-9a-f]{64}$'
@@ -111,7 +117,7 @@ if ! select_subscription; then
             echo "Subscriptions it can see:"
             az account list --all --query '[].{name:name, id:id, tenant:tenantDefaultDomain}' --output table
             echo
-            echo "A subscription in another directory needs AZURE_TENANT in deploy/config.env"
+            echo "A subscription in another directory needs AZURE_TENANT in deploy/config.local.env"
             echo "(the directory's domain, like example.onmicrosoft.com, or its tenant id)."
         } >&2
         exit 1

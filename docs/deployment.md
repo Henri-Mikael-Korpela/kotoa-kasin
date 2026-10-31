@@ -164,8 +164,8 @@ In a nutshell, the following Azure services are used:
 
 - **An Azure account with an active subscription (pay-as-you-go, or a plan with credits)**: You sign in with it when `deploy` asks (see below).
 - **The Owner or Contributor role on that subscription**: Needed to register resource providers and create resources.
-- **Subscription name or id**: Only if the account has more than one subscription. `AZURE_SUBSCRIPTION` in `deploy/config.env` is where you can set this.
-- **Directory (tenant) of the subscription**: Only if the subscription is not in the account's default directory. `AZURE_TENANT` in `deploy/config.env` is where you can set this.
+- **Subscription name or id**: Only if the account has more than one subscription. `AZURE_SUBSCRIPTION` in `deploy/config.local.env` is where you can set this.
+- **Directory (tenant) of the subscription**: Only if the subscription is not in the account's default directory. `AZURE_TENANT` in `deploy/config.local.env` is where you can set this.
 - **Region**: `swedencentral` by default. `AZURE_LOCATION` in `deploy/config.env` is where you can set this.
 - **Resource names**: Default values work, but you can set the other settings in `deploy/config.env`.
 
@@ -177,6 +177,17 @@ the app needs.
 
 Edit the file on your machine; the tooling container sees the change
 immediately.
+
+`deploy/config.env` is committed, so it must not hold anything that identifies
+your Azure account. Put `AZURE_SUBSCRIPTION` and `AZURE_TENANT` in
+`deploy/config.local.env` instead (not in version control). `deploy` reads it
+after `config.env`, so any setting in it overrides the one in `config.env`. Create
+it with just the lines you need:
+
+```
+AZURE_SUBSCRIPTION=<name or id>
+AZURE_TENANT=<example.onmicrosoft.com or tenant id>
+```
 
 | Setting | Default | Notes |
 |---|---|---|
