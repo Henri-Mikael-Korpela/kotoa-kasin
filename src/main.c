@@ -111,6 +111,12 @@ enum {
     MAX_REPORTED_BLOCKS = 500,
     /** Room for the headers of a login response, in bytes: the session cookie is the most. */
     SESSION_HEADERS_SIZE = 512,
+    /** Largest public HTML page, in bytes: they are read whole to add nonces. */
+    MAX_PUBLIC_PAGE_SIZE = 24576,
+    /** Random bytes in a script nonce. */
+    NONCE_RANDOM_SIZE = 16,
+    /** Room for the Content-Security-Policy line of a public page, in bytes. */
+    PUBLIC_CSP_SIZE = 320,
 };
 
 static_assert(RESP_BUF_SIZE >= 4 * HEAD_RESERVE, "RESP_BUF_SIZE too small");
@@ -362,30 +368,53 @@ static Str status_reason(int status) {
 }
 
 /*
- * Security headers, sent with every response.
+ * Security headers, sent with every response. The Content-Security-Policy is
+ * separate, as it depends on the response.
  *
- * The session token lives in an HttpOnly cookie, so no script can read it, but
- * an injected script could still call the API as the logged-in admin. The
- * Content-Security-Policy is the safety net: the pages have no inline scripts
- * or styles, and load scripts,
- * styles, images and API calls only from this site (plus Google Fonts), so an
- * injected <script>, inline handler or style, or a request to another site
- * does not run. blob: images are the upload preview of browsers without
- * createImageBitmap(). frame-ancestors and X-Frame-Options (for older
- * browsers) keep other sites from framing the pages to trick clicks;
- * nosniff keeps browsers from reading an upload as anything but its declared
- * type. HSTS makes browsers use HTTPS for the site for a year; they ignore it
- * over plain HTTP, such as the dev server.
+ * frame-ancestors (in the policies below) and X-Frame-Options (for older
+ * browsers) keep other sites from framing the pages to trick clicks; nosniff
+ * keeps browsers from reading an upload as anything but its declared type. HSTS
+ * makes browsers use HTTPS for the site for a year; they ignore it over plain
+ * HTTP, such as the dev server.
  */
 static Str const SECURITY_HEADERS = STR_INIT(
-    "Content-Security-Policy: default-src 'self'; script-src 'self'; "
-    "style-src 'self' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; "
-    "img-src 'self' blob:; connect-src 'self'; object-src 'none'; base-uri 'none'; "
-    "form-action 'self'; frame-ancestors 'none'\r\n"
     "X-Content-Type-Options: nosniff\r\n"
     "X-Frame-Options: DENY\r\n"
     "Referrer-Policy: strict-origin-when-cross-origin\r\n"
     "Strict-Transport-Security: max-age=31536000\r\n");
+
+/*
+ * The policy of everything but public pages: the admin pages, the API and files.
+ *
+ * The session token lives in an HttpOnly cookie, so no script can read it, but
+ * an injected script could still call the API as the logged-in admin. This
+ * policy is the safety net: the admin pages have no inline scripts or styles,
+ * and load scripts, styles, images and API calls only from this site (plus
+ * Google Fonts), so an injected <script>, inline handler or style, or a request
+ * to another site does not run. blob: images are the upload preview of browsers
+ * without createImageBitmap().
+ */
+static Str const STRICT_CSP = STR_INIT(
+    "Content-Security-Policy: default-src 'self'; script-src 'self'; "
+    "style-src 'self' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; "
+    "img-src 'self' blob:; connect-src 'self'; object-src 'none'; base-uri 'none'; "
+    "form-action 'self'; frame-ancestors 'none'\r\n");
+
+/*
+ * The policy of public pages, around a nonce made for each response: the one
+ * Google AdSense supports (https://support.google.com/adsense/answer/16283098).
+ * AdSense's addresses change over time, so it cannot be listed by address.
+ *
+ * Scripts run only with the nonce or when loaded by a script that has it
+ * ('strict-dynamic'). Browsers that know nonces ignore 'unsafe-inline' and the
+ * schemes, which are for older browsers. There is no default-src: ads load
+ * images, frames, styles and connections from many sites. AdSense needs
+ * 'unsafe-eval'.
+ */
+static Str const PUBLIC_CSP_START = STR_INIT("Content-Security-Policy: script-src 'nonce-");
+static Str const PUBLIC_CSP_END = STR_INIT(
+    "' 'strict-dynamic' 'unsafe-inline' 'unsafe-eval' https: http:; object-src 'none'; "
+    "base-uri 'none'; form-action 'self'; frame-ancestors 'none'\r\n");
 
 /**
  * The parts of a response that vary: everything but the body.
@@ -395,6 +424,8 @@ typedef struct {
     Str  content_type;
     /** Complete header lines, each ending in "\r\n"; may be empty. */
     Str  extra_headers;
+    /** The complete Content-Security-Policy line. */
+    Str  csp;
     /** The request was HEAD: the head is sent without the body. */
     bool head_only;
 } Reply;
@@ -404,6 +435,7 @@ static Reply make_reply(int status, Str content_type, bool head_only, Str extra_
         .status = status,
         .content_type = content_type,
         .extra_headers = extra_headers,
+        .csp = STRICT_CSP,
         .head_only = head_only,
     };
 }
@@ -426,6 +458,7 @@ static void write_head(Str_Builder *b, Conn const *c, Reply const *reply,
     str_builder_append(b, c->keepalive ? STR("keep-alive") : STR("close"));
     str_builder_append(b, STR("\r\n"));
     str_builder_append(b, SECURITY_HEADERS);
+    str_builder_append(b, reply->csp);
     str_builder_append(b, reply->extra_headers);
     str_builder_append(b, STR("\r\n"));
 }
@@ -467,24 +500,28 @@ static void body_begin(Conn *c, Str_Builder *body) {
  * Writes the head right in front of a body started with body_begin(), so the
  * response is one contiguous span and Content-Length is exact.
  */
-static void respond_json(Conn *c, int status, Str_Builder const *body, bool head_only,
-                         Str extra_headers) {
+static void respond_in_place(Conn *c, Reply const *reply, Str_Builder const *body) {
     if (body->overflow) {
-        respond_error(c, 500, head_only);
+        respond_error(c, 500, reply->head_only);
         return;
     }
-    Reply const reply = make_reply(status, JSON_TYPE, head_only, extra_headers);
     char head_buf[HEAD_RESERVE];
     Str_Builder head;
     str_builder_init(&head, head_buf, sizeof head_buf);
-    write_head(&head, c, &reply, body->len);
+    write_head(&head, c, reply, body->len);
     if (head.overflow) {
-        respond_error(c, 500, head_only);
+        respond_error(c, 500, reply->head_only);
         return;
     }
     c->resp_pos = HEAD_RESERVE - (uint32_t)head.len;
     memcpy(c->out + c->resp_pos, head.data, head.len);
-    c->resp_end = HEAD_RESERVE + (head_only ? 0 : (uint32_t)body->len);
+    c->resp_end = HEAD_RESERVE + (reply->head_only ? 0 : (uint32_t)body->len);
+}
+
+static void respond_json(Conn *c, int status, Str_Builder const *body, bool head_only,
+                         Str extra_headers) {
+    Reply const reply = make_reply(status, JSON_TYPE, head_only, extra_headers);
+    respond_in_place(c, &reply, body);
 }
 
 /**
@@ -644,6 +681,92 @@ static void send_file(Conn *c, Reply const *reply, int fd, struct stat const *st
 }
 
 /**
+ * Whether a file gets the public page policy. Anything that names the admin pages
+ * does not, however its path is written.
+ */
+static bool is_public_page(Str path, Str mime) {
+    return str_starts_with(mime, STR("text/html")) && !str_contains(path, STR("hallinta"));
+}
+
+/**
+ * Appends a page with the nonce added to each of its <script> tags. Pages are the
+ * site's own files; recipes reach them only through scripts, which cannot use it.
+ */
+static void append_page_with_nonce(Str_Builder *out, Str page, Str nonce) {
+    assert(out != NULL);
+    Str const tag = STR("<script");
+    Str rest = page;
+    size_t at = str_find(rest, tag);
+    while (at != STR_NPOS) {
+        str_builder_append(out, str_slice(rest, 0, at + tag.len));
+        str_builder_append(out, STR(" nonce=\""));
+        str_builder_append(out, nonce);
+        str_builder_append(out, STR("\""));
+        rest = str_slice(rest, at + tag.len, rest.len);
+        at = str_find(rest, tag);
+    }
+    str_builder_append(out, rest);
+}
+
+/**
+ * Makes a nonce from the system's random bytes, in hexadecimal.
+ *
+ * @return False when there were no random bytes to be had.
+ */
+static bool make_nonce(Str_Builder *nonce) {
+    assert(nonce != NULL);
+    unsigned char random[NONCE_RANDOM_SIZE];
+    if (getrandom(random, sizeof random, 0) != (ssize_t)sizeof random) {
+        return false;
+    }
+    char const digits[] = "0123456789abcdef";
+    for (size_t i = 0; i < sizeof random; i++) {
+        str_builder_append_char(nonce, digits[random[i] >> 4]);
+        str_builder_append_char(nonce, digits[random[i] & 0x0f]);
+    }
+    return !nonce->overflow;
+}
+
+/**
+ * Sends a public page with a new nonce in its scripts and its policy. Takes
+ * ownership of fd. The page must not be reused, as it is only good with its own
+ * response's nonce; browsers ask for it again each time.
+ */
+static void send_public_page(Conn *c, int status, Str mime, bool head_only, int fd,
+                             struct stat const *st) {
+    char page_buf[MAX_PUBLIC_PAGE_SIZE];
+    bool const fits = S_ISREG(st->st_mode) && st->st_size <= (off_t)sizeof page_buf;
+    ssize_t const got = fits ? read(fd, page_buf, (size_t)st->st_size) : -1;
+    close(fd);
+    char nonce_buf[NONCE_RANDOM_SIZE * 2];
+    Str_Builder nonce;
+    str_builder_init(&nonce, nonce_buf, sizeof nonce_buf);
+    if (got != (ssize_t)st->st_size || !make_nonce(&nonce)) {
+        fprintf(stderr, "error: could not prepare a public page\n");
+        respond_error(c, 500, head_only);
+        return;
+    }
+
+    char csp_buf[PUBLIC_CSP_SIZE];
+    Str_Builder csp;
+    str_builder_init(&csp, csp_buf, sizeof csp_buf);
+    str_builder_append(&csp, PUBLIC_CSP_START);
+    str_builder_append(&csp, str_builder_str(&nonce));
+    str_builder_append(&csp, PUBLIC_CSP_END);
+    if (csp.overflow) {
+        respond_error(c, 500, head_only);
+        return;
+    }
+
+    Str_Builder body;
+    body_begin(c, &body);
+    append_page_with_nonce(&body, str_make(page_buf, (size_t)got), str_builder_str(&nonce));
+    Reply reply = make_reply(status, mime, head_only, STR("Cache-Control: no-cache\r\n"));
+    reply.csp = str_builder_str(&csp);
+    respond_in_place(c, &reply, &body);
+}
+
+/**
  * Serves a file from the docroot.
  *
  * Clean URLs are supported: a directory serves its index.html, and a missing
@@ -679,7 +802,12 @@ static void serve_file(Conn *c, int status, Str rel_path, bool head_only, bool i
         }
         return;
     }
-    Reply const reply = make_reply(status, mime_for(str_builder_str(&path)), head_only, STR(""));
+    Str const mime = mime_for(str_builder_str(&path));
+    if (is_public_page(str_builder_str(&path), mime)) {
+        send_public_page(c, status, mime, head_only, fd, &st);
+        return;
+    }
+    Reply const reply = make_reply(status, mime, head_only, STR(""));
     send_file(c, &reply, fd, &st);
 }
 
