@@ -1,0 +1,100 @@
+# Continuous integration: build and test, static analysis, and the production image.
+# See docs/continuous-integration.md.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A newer push to the same branch or pull request replaces a run still going.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-test:
+    name: Build and test (${{ matrix.build_type }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        # Release is what ships. Debug keeps the asserts, which Release compiles out.
+        build_type: [Release, Debug]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y libsqlite3-dev
+
+      - name: Configure
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=${{ matrix.build_type }}
+
+      # The strict warning flags are on for every target; a warning is a failure here.
+      - name: Build
+        shell: bash
+        run: cmake --build build --parallel 2>&1 | tee build.log
+
+      - name: No compiler warnings
+        run: |
+          if grep -E 'warning:' build.log; then
+            echo "::error::The build produced warnings."
+            exit 1
+          fi
+
+      - name: Unit tests
+        run: ctest --test-dir build --output-on-failure
+
+  static-analysis:
+    name: Static analysis
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y libsqlite3-dev
+          # The version is pinned so a new release cannot fail the build on its own.
+          pip install clang-tidy==22.1.8
+
+      # clang-tidy reads the compiler commands (flags and -D limits) from this file.
+      - name: Configure
+        run: cmake -S . -B build -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+
+      # The checks and the reasons for the disabled ones are in .clang-tidy.
+      - name: clang-tidy
+        run: git ls-files 'src/*.c' 'tests/*.c' | xargs -P "$(nproc)" -n 1 clang-tidy -p build --quiet
+
+      - name: ShellCheck
+        run: shellcheck --severity=warning deploy/bin/deploy scripts/fetch-geoip
+
+  # Builds the production image without pushing it. Its build stage compiles on Alpine
+  # (musl) and runs the unit tests there, which can differ from Ubuntu (glibc).
+  docker-build:
+    name: Production image
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

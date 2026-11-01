@@ -1900,12 +1900,10 @@ static void conn_on_readable(Worker *w, Conn *c, int64_t now) {
         ssize_t n = recv(c->fd, c->in + c->req_len, c->in_cap - c->req_len, 0);
         if (n > 0) {
             c->req_len += (uint32_t)n;
-        } else if (n == 0) {
-            conn_close(w, c);
-            return;
-        } else if (errno == EAGAIN || errno == EINTR) {
+        } else if (n < 0 && (errno == EAGAIN || errno == EINTR)) {
             return;
         } else {
+            // The peer closed the connection (n == 0) or the read failed.
             conn_close(w, c);
             return;
         }

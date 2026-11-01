@@ -50,6 +50,7 @@ password first; see [Running locally](docs/local-development.md).
 
 | Document | Contents |
 |---|---|
+| [Continuous integration](docs/continuous-integration.md) | The GitHub Actions checks: build, tests, static analysis and the production image |
 | [Project layout](docs/project-layout.md) | What each directory and main file holds |
 | [Server options](docs/server-options.md) | Command line, environment variables and build-time limits |
 | [API](docs/api.md) | The JSON endpoints |

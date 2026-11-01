@@ -100,7 +100,7 @@ int main(void) {
     check("no longer listed", count == 0);
 
     // A success forgets the failures; an admin can lift a ban.
-    now = banned_at + 2 * LOGIN_BAN_SEC;
+    now = banned_at + 2 * (int64_t)LOGIN_BAN_SEC;
     fail_times(&admin, 5, &now);
     login_guard_succeeded(&GUARD, &admin);
     d = login_guard_failed(&GUARD, &admin, now);

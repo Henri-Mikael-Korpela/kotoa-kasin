@@ -1,0 +1,25 @@
+# Static analysis for the C code, run by the "Static analysis" job of
+# .github/workflows/ci.yml. Checks the compiler cannot make: the analyzer's
+# path-sensitive bugs, the CLAUDE.md ban on recursion and const-correct pointers.
+#
+# Switched off on purpose:
+#  - clang-analyzer-optin.performance.Padding: struct layout is not tuned for padding.
+#  - clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling: wants the
+#    C11 Annex K functions (fprintf_s, ...), which neither glibc nor musl has.
+#  - bugprone-reserved-identifier: CLAUDE.md names the header guards __KASIN_<NAME>_H__.
+#  - bugprone-easily-swappable-parameters, bugprone-narrowing-conversions: the
+#    compiler's -Wconversion and -Wsign-conversion already cover the second, and the
+#    first flags nearly every function taking two sizes.
+Checks: >
+  -*,
+  clang-analyzer-*,
+  -clang-analyzer-optin.performance.Padding,
+  -clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling,
+  bugprone-*,
+  -bugprone-reserved-identifier,
+  -bugprone-easily-swappable-parameters,
+  -bugprone-narrowing-conversions,
+  misc-no-recursion,
+  readability-non-const-parameter
+WarningsAsErrors: '*'
+HeaderFilterRegex: '^.*/(src|tests)/.*'
