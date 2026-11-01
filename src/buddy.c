@@ -1,7 +1,7 @@
-#include "buddy.h"
-
 #include <assert.h>
 #include <string.h>
+
+#include "buddy.h"
 
 /*
  * Every block, free or allocated, starts with this header, so the buddy of

@@ -1,8 +1,8 @@
-#include "password.h"
-
 #include <assert.h>
 #include <string.h>
 #include <sys/random.h>
+
+#include "password.h"
 
 static Str const PREFIX = STR_INIT("pbkdf2-sha256:");
 static Str const HEX_DIGITS = STR_INIT("0123456789abcdef");
@@ -13,16 +13,17 @@ static Str const HEX_DIGITS = STR_INIT("0123456789abcdef");
  * of thousands of HMACs with the same key.
  */
 typedef struct {
-    Sha256 inner;  /**< State after the key XOR ipad block. */
-    Sha256 outer;  /**< State after the key XOR opad block. */
-} Hmac_Key;
+    SHA256 inner;  /**< State after the key XOR ipad block. */
+    SHA256 outer;  /**< State after the key XOR opad block. */
+} HMAC_Key;
 
-static void hmac_key_init(Hmac_Key *k, Str key) {
+static void hmac_key_init(HMAC_Key *k, Str key) {
     assert(k != NULL);
+
     uint8_t block[SHA256_BLOCK_SIZE];
     memset(block, 0, sizeof block);
     if (key.len > SHA256_BLOCK_SIZE) {
-        Sha256 ctx;
+        SHA256 ctx;
         sha256_init(&ctx);
         sha256_update(&ctx, key.data, key.len);
         sha256_final(&ctx, block);
@@ -43,10 +44,11 @@ static void hmac_key_init(Hmac_Key *k, Str key) {
     sha256_update(&k->outer, pad, sizeof pad);
 }
 
-static void hmac_with_key(Hmac_Key const *k, void const *msg, size_t msg_len,
+static void hmac_with_key(HMAC_Key const *k, void const *msg, size_t msg_len,
                           uint8_t out[SHA256_DIGEST_SIZE]) {
     assert(out != NULL);
-    Sha256 ctx = k->inner;
+
+    SHA256 ctx = k->inner;
     sha256_update(&ctx, msg, msg_len);
     uint8_t inner_hash[SHA256_DIGEST_SIZE];
     sha256_final(&ctx, inner_hash);
@@ -59,11 +61,12 @@ void pbkdf2_sha256(Str password, uint8_t const *salt, size_t salt_len, uint32_t 
                    uint8_t out[SHA256_DIGEST_SIZE]) {
     assert(salt != NULL);
     assert(out != NULL);
-    Hmac_Key key;
+
+    HMAC_Key key;
     hmac_key_init(&key, password);
 
     // The first block only: T1 = U1 ^ U2 ^ ... with U1 = HMAC(P, S || INT(1)).
-    Sha256 first = key.inner;
+    SHA256 first = key.inner;
     uint8_t const block_index[4] = {
         0,
         0,
@@ -74,7 +77,7 @@ void pbkdf2_sha256(Str password, uint8_t const *salt, size_t salt_len, uint32_t 
     sha256_update(&first, block_index, sizeof block_index);
     uint8_t inner_hash[SHA256_DIGEST_SIZE];
     sha256_final(&first, inner_hash);
-    Sha256 outer = key.outer;
+    SHA256 outer = key.outer;
     sha256_update(&outer, inner_hash, sizeof inner_hash);
 
     uint8_t u[SHA256_DIGEST_SIZE];

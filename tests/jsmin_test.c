@@ -54,7 +54,7 @@ static void expect_error(char const *input, size_t line, char const *message) {
 }
 
 static void expect_names(char const *input, char const *expected) {
-    Js_Name names[32];
+    JS_Name names[32];
     size_t count;
     Minify_Error error;
     if (!js_top_level_names(str_from_cstr(input), names, 32, &count, &error)) {

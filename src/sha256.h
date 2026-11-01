@@ -21,22 +21,22 @@ typedef struct {
     uint64_t total_len;
     uint8_t  block[SHA256_BLOCK_SIZE];
     size_t   block_len;
-} Sha256;
+} SHA256;
 
 /**
  * Starts a new hash computation.
  */
-void sha256_init(Sha256 *ctx);
+void sha256_init(SHA256 *ctx);
 
 /**
  * Feeds bytes into the hash.
  */
-void sha256_update(Sha256 *ctx, void const *data, size_t len);
+void sha256_update(SHA256 *ctx, void const *data, size_t len);
 
 /**
  * Finishes the hash and writes the 32-byte digest.
  */
-void sha256_final(Sha256 *ctx, uint8_t out[SHA256_DIGEST_SIZE]);
+void sha256_final(SHA256 *ctx, uint8_t out[SHA256_DIGEST_SIZE]);
 
 /**
  * Computes HMAC-SHA256 of a message with a key of any length.

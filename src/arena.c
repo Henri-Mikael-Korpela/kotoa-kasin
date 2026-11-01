@@ -1,6 +1,6 @@
-#include "arena.h"
-
 #include <assert.h>
+
+#include "arena.h"
 
 size_t arena_align_up(size_t value, size_t align) {
     return (value + align - 1) & ~(align - 1);

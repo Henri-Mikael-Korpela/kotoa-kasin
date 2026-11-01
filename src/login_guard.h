@@ -70,7 +70,7 @@ typedef struct {
 } Login_Decision;
 
 typedef struct {
-    Ip_Address ip;
+    IP_Address ip;
     int64_t    last_failure;  /**< 0 when the slot is free. */
     uint32_t   failures;
     uint32_t   refused;  /**< Refusals not logged yet. */
@@ -90,7 +90,7 @@ typedef struct {
  * An address that must currently wait or is banned.
  */
 typedef struct {
-    Ip_Address ip;
+    IP_Address ip;
     uint32_t   failures;
     int64_t    until;  /**< When it may try again. */
     bool       banned;
@@ -107,7 +107,7 @@ void login_guard_init(Login_Guard *g, int64_t now);
  * Decides whether an address may try a password now. An allowed attempt uses
  * up one of the checks of the current minute.
  */
-Login_Decision login_guard_check(Login_Guard *g, Ip_Address const *ip, int64_t now);
+Login_Decision login_guard_check(Login_Guard *g, IP_Address const *ip, int64_t now);
 
 /**
  * Records a failed login.
@@ -116,24 +116,24 @@ Login_Decision login_guard_check(Login_Guard *g, Ip_Address const *ip, int64_t n
  *         its next attempt (verdict LOGIN_DELAYED or LOGIN_BANNED), or
  *         LOGIN_ALLOWED when it may try again at once.
  */
-Login_Decision login_guard_failed(Login_Guard *g, Ip_Address const *ip, int64_t now);
+Login_Decision login_guard_failed(Login_Guard *g, IP_Address const *ip, int64_t now);
 
 /**
  * Records a successful login: the address's failures are forgotten.
  */
-void login_guard_succeeded(Login_Guard *g, Ip_Address const *ip);
+void login_guard_succeeded(Login_Guard *g, IP_Address const *ip);
 
 /**
  * Restores an address's failures, read back from the database at startup, so
  * waits and bans survive a restart.
  */
-void login_guard_restore(Login_Guard *g, Ip_Address const *ip, uint32_t failures,
+void login_guard_restore(Login_Guard *g, IP_Address const *ip, uint32_t failures,
                          int64_t last_failure);
 
 /**
  * Lifts an address's wait or ban (the admin's "unblock").
  */
-void login_guard_clear(Login_Guard *g, Ip_Address const *ip);
+void login_guard_clear(Login_Guard *g, IP_Address const *ip);
 
 /**
  * Lists the addresses that must currently wait or are banned.

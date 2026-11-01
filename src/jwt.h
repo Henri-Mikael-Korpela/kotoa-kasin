@@ -26,7 +26,7 @@ typedef struct {
     size_t  subject_len;
     int64_t issued_at;
     int64_t expires_at;
-} Jwt_Claims;
+} JWT_Claims;
 
 /**
  * Appends a signed token to out.
@@ -49,6 +49,6 @@ bool jwt_issue(Str_Builder *out, Str subject, int64_t issued_at, int64_t expires
  * @param claims Receives the token's claims when valid; may be NULL.
  * @return True when the token was issued with this key and has not expired.
  */
-bool jwt_verify(Str token, Str key, int64_t now, Jwt_Claims *claims);
+bool jwt_verify(Str token, Str key, int64_t now, JWT_Claims *claims);
 
 #endif  // __KASIN_JWT_H__

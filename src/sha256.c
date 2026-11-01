@@ -1,7 +1,7 @@
-#include "sha256.h"
-
 #include <assert.h>
 #include <string.h>
+
+#include "sha256.h"
 
 static uint32_t const K[64] = {
     0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
@@ -65,7 +65,7 @@ static void compress(uint32_t state[8], uint8_t const block[SHA256_BLOCK_SIZE]) 
     state[7] += h;
 }
 
-void sha256_init(Sha256 *ctx) {
+void sha256_init(SHA256 *ctx) {
     static uint32_t const INITIAL_STATE[8] = {
         0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
         0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19,
@@ -75,7 +75,7 @@ void sha256_init(Sha256 *ctx) {
     ctx->block_len = 0;
 }
 
-void sha256_update(Sha256 *ctx, void const *data, size_t len) {
+void sha256_update(SHA256 *ctx, void const *data, size_t len) {
     uint8_t const *p = data;
     ctx->total_len += len;
     while (len > 0) {
@@ -94,7 +94,7 @@ void sha256_update(Sha256 *ctx, void const *data, size_t len) {
     }
 }
 
-void sha256_final(Sha256 *ctx, uint8_t out[SHA256_DIGEST_SIZE]) {
+void sha256_final(SHA256 *ctx, uint8_t out[SHA256_DIGEST_SIZE]) {
     assert(out != NULL);
     uint64_t bit_len = ctx->total_len * 8;
     uint8_t pad = 0x80;
@@ -123,7 +123,7 @@ void hmac_sha256(void const *key, size_t key_len, void const *msg, size_t msg_le
         0,
     };
     if (key_len > SHA256_BLOCK_SIZE) {
-        Sha256 key_hash;
+        SHA256 key_hash;
         sha256_init(&key_hash);
         sha256_update(&key_hash, key, key_len);
         sha256_final(&key_hash, key_block);
@@ -133,7 +133,7 @@ void hmac_sha256(void const *key, size_t key_len, void const *msg, size_t msg_le
 
     uint8_t pad[SHA256_BLOCK_SIZE];
     uint8_t inner_digest[SHA256_DIGEST_SIZE];
-    Sha256 ctx;
+    SHA256 ctx;
 
     for (size_t i = 0; i < SHA256_BLOCK_SIZE; i++) {
         pad[i] = key_block[i] ^ 0x36;

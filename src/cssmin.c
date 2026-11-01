@@ -1,6 +1,6 @@
-#include "cssmin.h"
-
 #include <assert.h>
+
+#include "cssmin.h"
 
 /**
  * The pieces a style sheet is read in. The minifier works on these rather than
@@ -285,6 +285,7 @@ static bool copy_custom_property_value(Scanner *sc, Str_Builder *out, unsigned c
     size_t const start = sc->pos;
     size_t nesting = 0;
     Piece p;
+    // Each pass reads one piece, so the loop ends with the source.
     for (;;) {
         size_t const before = sc->pos;
         if (!next_piece(sc, &p)) {
@@ -314,9 +315,45 @@ static bool copy_custom_property_value(Scanner *sc, Str_Builder *out, unsigned c
     return true;
 }
 
+/**
+ * Writes a piece of the source as it is, except that a url() is trimmed.
+ */
+static void write_piece(Str_Builder *out, Piece const *p) {
+    assert(out != NULL);
+    assert(p != NULL);
+
+    if (p->kind == PIECE_URL) {
+        str_builder_append(out, STR("url("));
+        str_builder_append(out, trim_space(str_slice(p->text, 4, p->text.len - 1)));
+        str_builder_append_char(out, ')');
+    } else {
+        str_builder_append(out, p->text);
+    }
+}
+
+/**
+ * Checks what is left once every piece is read: balanced braces and room in the output.
+ */
+static bool check_minified(Str source, Str_Builder const *out, size_t depth,
+                           Minify_Error *error) {
+    assert(out != NULL);
+    assert(error != NULL);
+
+    if (depth > 0) {
+        return fail(error, source, source.len, STR("unclosed {"));
+    }
+    if (out->overflow) {
+        error->line = 0;
+        error->message = STR("output buffer full");
+        return false;
+    }
+    return true;
+}
+
 bool css_minify(Str source, Str_Builder *out, Minify_Error *error) {
     assert(out != NULL);
     assert(error != NULL);
+
     Scanner sc = {
         .source = source,
         .pos = 0,
@@ -327,6 +364,7 @@ bool css_minify(Str source, Str_Builder *out, Minify_Error *error) {
     unsigned char last = 0;   // The last byte written by this call; 0 before the first.
     size_t depth = 0;
     Piece p;
+    // Each pass reads one piece, so the loop ends with the source.
     for (;;) {
         if (!next_piece(&sc, &p)) {
             return false;
@@ -365,13 +403,7 @@ bool css_minify(Str source, Str_Builder *out, Minify_Error *error) {
             }
         }
 
-        if (p.kind == PIECE_URL) {
-            str_builder_append(out, STR("url("));
-            str_builder_append(out, trim_space(str_slice(p.text, 4, p.text.len - 1)));
-            str_builder_append_char(out, ')');
-        } else {
-            str_builder_append(out, p.text);
-        }
+        write_piece(out, &p);
         last = (unsigned char)p.text.data[p.text.len - 1];
 
         bool const property_colon = p.kind == PIECE_CHAR && first == ':' && !out->overflow;
@@ -381,15 +413,7 @@ bool css_minify(Str source, Str_Builder *out, Minify_Error *error) {
             }
         }
     }
-    if (depth > 0) {
-        return fail(error, source, source.len, STR("unclosed {"));
-    }
-    if (out->overflow) {
-        error->line = 0;
-        error->message = STR("output buffer full");
-        return false;
-    }
-    return true;
+    return check_minified(source, out, depth, error);
 }
 
 bool css_check(Str source, Minify_Error *error) {
@@ -401,6 +425,7 @@ bool css_check(Str source, Minify_Error *error) {
     };
     size_t depth = 0;
     Piece p;
+    // Each pass reads one piece, so the loop ends with the source.
     for (;;) {
         if (!next_piece(&sc, &p)) {
             return false;

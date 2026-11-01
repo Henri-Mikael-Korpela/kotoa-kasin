@@ -29,7 +29,7 @@ enum {
  * Checks that no two sources of a bundle declare the same top-level name.
  */
 static bool check_names(Arena *arena, Bundle const *bundle, Str const *contents) {
-    Js_Name *names = arena_alloc(arena, MAX_NAMES * sizeof *names, _Alignof(Js_Name));
+    JS_Name *names = arena_alloc(arena, MAX_NAMES * sizeof *names, _Alignof(JS_Name));
     size_t *owner = arena_alloc(arena, MAX_NAMES * sizeof *owner, _Alignof(size_t));
     if (names == NULL || owner == NULL) {
         fprintf(stderr, "out of memory\n");

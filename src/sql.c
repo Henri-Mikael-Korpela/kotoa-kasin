@@ -1,7 +1,7 @@
-#include "sql.h"
-
 #include <assert.h>
 #include <stdio.h>
+
+#include "sql.h"
 
 bool sql_exec(sqlite3 *conn, Str sql, Str context) {
     char const *rest = sql.data;

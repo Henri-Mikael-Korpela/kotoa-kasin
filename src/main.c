@@ -146,7 +146,7 @@ typedef struct Conn {
     off_t         file_pos;  /**< Next byte of file_fd to send. */
     off_t         file_end;  /**< One past last byte of file_fd to send. */
     int64_t       last_active;  /**< Monotonic seconds. */
-    Ip_Address    peer;  /**< The address the connection comes from. */
+    IP_Address    peer;  /**< The address the connection comes from. */
     struct Conn  *next_free;
     uint8_t      *req;  /**< REQ_BUF_SIZE bytes, lives in the arena. */
     uint8_t      *resp;  /**< RESP_BUF_SIZE bytes, lives in the arena. */
@@ -165,7 +165,7 @@ typedef struct Worker {
     Conn               *conns;
     Conn               *free_list;
     struct epoll_event *events;
-    Db                  db;  /**< This worker's own database connection. */
+    DB                  db;  /**< This worker's own database connection. */
     uint8_t            *big_free[BIG_BUFS_PER_WORKER];  /**< Large buffers not lent out. */
     int                 big_free_count;
 } Worker;
@@ -185,7 +185,7 @@ static Password_Hash ADMIN_PASSWORD_HASH;
 static bool LOGIN_ENABLED = false;
 
 static Login_Guard LOGIN_GUARD;  // Brute-force protection, shared by all workers.
-static Geoip GEOIP;  // Countries of addresses; empty when no country file is given.
+static GeoIP GEOIP;  // Countries of addresses; empty when no country file is given.
 
 /*
  * Whether the server runs behind a proxy that adds the client's address to
@@ -238,68 +238,75 @@ static int64_t mono_sec(void) {
     return ts.tv_sec;
 }
 
+typedef struct {
+    Str ext;
+    Str mime;
+} MIME_Type;
+
+/** File extensions and the content type each is served with. */
+static MIME_Type const MIME_TABLE[] = {
+    {
+        .ext = STR_INIT(".html"),
+        .mime = STR_INIT("text/html; charset=utf-8"),
+    },
+    {
+        .ext = STR_INIT(".htm"),
+        .mime = STR_INIT("text/html; charset=utf-8"),
+    },
+    {
+        .ext = STR_INIT(".css"),
+        .mime = STR_INIT("text/css; charset=utf-8"),
+    },
+    {
+        .ext = STR_INIT(".js"),
+        .mime = STR_INIT("text/javascript; charset=utf-8"),
+    },
+    {
+        .ext = STR_INIT(".json"),
+        .mime = STR_INIT("application/json"),
+    },
+    {
+        .ext = STR_INIT(".txt"),
+        .mime = STR_INIT("text/plain; charset=utf-8"),
+    },
+    {
+        .ext = STR_INIT(".svg"),
+        .mime = STR_INIT("image/svg+xml"),
+    },
+    {
+        .ext = STR_INIT(".png"),
+        .mime = STR_INIT("image/png"),
+    },
+    {
+        .ext = STR_INIT(".jpg"),
+        .mime = STR_INIT("image/jpeg"),
+    },
+    {
+        .ext = STR_INIT(".jpeg"),
+        .mime = STR_INIT("image/jpeg"),
+    },
+    {
+        .ext = STR_INIT(".gif"),
+        .mime = STR_INIT("image/gif"),
+    },
+    {
+        .ext = STR_INIT(".ico"),
+        .mime = STR_INIT("image/x-icon"),
+    },
+    {
+        .ext = STR_INIT(".webp"),
+        .mime = STR_INIT("image/webp"),
+    },
+    {
+        .ext = STR_INIT(".wasm"),
+        .mime = STR_INIT("application/wasm"),
+    },
+};
+
+/**
+ * The content type of a file, by its extension; binary when it has no known one.
+ */
 static Str mime_for(Str path) {
-    static struct {
-        Str ext;
-        Str mime;
-    } const MIME_TABLE[] = {
-        {
-            .ext = STR_INIT(".html"),
-            .mime = STR_INIT("text/html; charset=utf-8"),
-        },
-        {
-            .ext = STR_INIT(".htm"),
-            .mime = STR_INIT("text/html; charset=utf-8"),
-        },
-        {
-            .ext = STR_INIT(".css"),
-            .mime = STR_INIT("text/css; charset=utf-8"),
-        },
-        {
-            .ext = STR_INIT(".js"),
-            .mime = STR_INIT("text/javascript; charset=utf-8"),
-        },
-        {
-            .ext = STR_INIT(".json"),
-            .mime = STR_INIT("application/json"),
-        },
-        {
-            .ext = STR_INIT(".txt"),
-            .mime = STR_INIT("text/plain; charset=utf-8"),
-        },
-        {
-            .ext = STR_INIT(".svg"),
-            .mime = STR_INIT("image/svg+xml"),
-        },
-        {
-            .ext = STR_INIT(".png"),
-            .mime = STR_INIT("image/png"),
-        },
-        {
-            .ext = STR_INIT(".jpg"),
-            .mime = STR_INIT("image/jpeg"),
-        },
-        {
-            .ext = STR_INIT(".jpeg"),
-            .mime = STR_INIT("image/jpeg"),
-        },
-        {
-            .ext = STR_INIT(".gif"),
-            .mime = STR_INIT("image/gif"),
-        },
-        {
-            .ext = STR_INIT(".ico"),
-            .mime = STR_INIT("image/x-icon"),
-        },
-        {
-            .ext = STR_INIT(".webp"),
-            .mime = STR_INIT("image/webp"),
-        },
-        {
-            .ext = STR_INIT(".wasm"),
-            .mime = STR_INIT("application/wasm"),
-        },
-    };
     size_t dot = str_rfind_char(path, '.');
     if (dot != STR_NPOS) {
         Str ext = str_slice(path, dot, path.len);
@@ -536,20 +543,20 @@ static void respond_json_error(Conn *c, int status, Str message, Str extra_heade
     respond_json(c, status, &body, false, extra_headers);
 }
 
-static void respond_db_error(Conn *c, Db_Status status) {
+static void respond_db_error(Conn *c, DB_Status status) {
     switch (status) {
-    case DB_NOT_FOUND:
-        respond_json_error(c, 404, STR("not found"), NO_STORE);
-        break;
-    case DB_INVALID:
-        respond_json_error(c, 400, STR("invalid request body"), NO_STORE);
+    case DB_BUSY:
+        respond_json_error(c, 503, STR("database busy"),
+                           STR("Cache-Control: no-store\r\nRetry-After: 1\r\n"));
         break;
     case DB_CONFLICT:
         respond_json_error(c, 409, STR("conflict with existing data"), NO_STORE);
         break;
-    case DB_BUSY:
-        respond_json_error(c, 503, STR("database busy"),
-                           STR("Cache-Control: no-store\r\nRetry-After: 1\r\n"));
+    case DB_INVALID:
+        respond_json_error(c, 400, STR("invalid request body"), NO_STORE);
+        break;
+    case DB_NOT_FOUND:
+        respond_json_error(c, 404, STR("not found"), NO_STORE);
         break;
     case DB_TOO_LARGE:
         respond_json_error(c, 500, STR("response too large"), NO_STORE);
@@ -858,7 +865,7 @@ typedef struct {
     Str                    body;
     bool                   head_only;
     Request_Headers const *headers;
-    Ip_Address             client;  /**< The client's address (see TRUST_PROXY). */
+    IP_Address             client;  /**< The client's address (see TRUST_PROXY). */
 } Request;
 
 /**
@@ -948,7 +955,7 @@ static bool find_cookie(Str cookies, Str wanted, Str *value) {
  * Sec-Fetch-Site covers any that do. Clients without the header are not browsers,
  * or old ones, and pass this check.
  */
-static bool authenticate_headers(Request_Headers const *h, Jwt_Claims *claims) {
+static bool authenticate_headers(Request_Headers const *h, JWT_Claims *claims) {
     if (str_eq(h->sec_fetch_site, STR("cross-site")) ||
         str_eq(h->sec_fetch_site, STR("same-site"))) {
         return false;
@@ -960,7 +967,7 @@ static bool authenticate_headers(Request_Headers const *h, Jwt_Claims *claims) {
     return jwt_verify(token, jwt_key(), unix_now(), claims);
 }
 
-static bool authenticate(Request const *r, Jwt_Claims *claims) {
+static bool authenticate(Request const *r, JWT_Claims *claims) {
     return authenticate_headers(r->headers, claims);
 }
 
@@ -988,7 +995,7 @@ typedef struct {
     Str         country;  /**< Empty when unknown. */
 } Login_Client;
 
-static void describe_client(Ip_Address const *address, Login_Client *client) {
+static void describe_client(IP_Address const *address, Login_Client *client) {
     assert(client != NULL);
     Str_Builder ip;
     str_builder_init(&ip, client->ip_buf, sizeof client->ip_buf);
@@ -1133,6 +1140,49 @@ static void append_cookie_attributes(Str_Builder *headers, int64_t max_age_sec) 
 }
 
 /**
+ * Answers a login with a wrong user name or password: the wait before the next attempt.
+ */
+static void respond_login_failed(Conn *c, Login_Decision const *after) {
+    assert(after != NULL);
+
+    Str_Builder body;
+    body_begin(c, &body);
+    str_builder_append(&body, STR("{\"error\":\"invalid username or password\","
+                                  "\"retry_after\":"));
+    str_builder_append_u64(&body, (uint64_t)after->retry_after);
+    str_builder_append(&body, STR("}"));
+    respond_json(c, 401, &body, false, NO_STORE);
+}
+
+/**
+ * Answers a correct login: the session cookie, and when the session ends.
+ */
+static void respond_login_succeeded(Conn *c, int64_t now) {
+    int64_t const expires_at = now + TOKEN_LIFETIME_SEC;
+    char headers_buf[SESSION_HEADERS_SIZE];
+    Str_Builder headers;
+    str_builder_init(&headers, headers_buf, sizeof headers_buf);
+    str_builder_append(&headers, STR("Cache-Control: no-store\r\nSet-Cookie: "));
+    str_builder_append(&headers, SESSION_COOKIE);
+    str_builder_append(&headers, STR("="));
+    if (!jwt_issue(&headers, ADMIN_USERNAME, now, expires_at, jwt_key())) {
+        respond_json_error(c, 500, STR("cannot issue token"), NO_STORE);
+        return;
+    }
+    append_cookie_attributes(&headers, TOKEN_LIFETIME_SEC);
+    if (headers.overflow) {
+        respond_json_error(c, 500, STR("cannot issue token"), NO_STORE);
+        return;
+    }
+    Str_Builder body;
+    body_begin(c, &body);
+    str_builder_append(&body, STR("{\"expires_at\":"));
+    str_builder_append_u64(&body, (uint64_t)expires_at);
+    str_builder_append(&body, STR("}"));
+    respond_json(c, 200, &body, false, str_builder_str(&headers));
+}
+
+/**
  * POST /api/login. An address that failed too often recently, or a burst of
  * attempts from everywhere, is refused at once (see login_guard.h). Every
  * password that is checked is recorded in the database and logged.
@@ -1160,7 +1210,7 @@ static void api_login(Worker *w, Conn *c, Request const *r) {
     Str_Builder password;
     str_builder_init(&username, username_buf, sizeof username_buf);
     str_builder_init(&password, password_buf, sizeof password_buf);
-    Db_Status status = db_parse_login(&w->db, r->body, &username, &password);
+    DB_Status status = db_parse_login(&w->db, r->body, &username, &password);
     if (status != DB_OK) {
         explicit_bzero(password_buf, sizeof password_buf);
         respond_db_error(c, status);
@@ -1174,7 +1224,7 @@ static void api_login(Worker *w, Conn *c, Request const *r) {
 
     char name_buf[100];
     char agent_buf[300];
-    Db_Login_Attempt const attempt = {
+    DB_Login_Attempt const attempt = {
         .ip = client.ip,
         .country = client.country,
         .username = clean_text(str_builder_str(&username), name_buf, sizeof name_buf, false),
@@ -1190,40 +1240,12 @@ static void api_login(Worker *w, Conn *c, Request const *r) {
     if (!succeeded) {
         Login_Decision const after = login_guard_failed(&LOGIN_GUARD, &r->client, now);
         log_login_checked(&client, attempt.username, false, &after);
-        Str_Builder body;
-        body_begin(c, &body);
-        str_builder_append(&body, STR("{\"error\":\"invalid username or password\","
-                                      "\"retry_after\":"));
-        str_builder_append_u64(&body, (uint64_t)after.retry_after);
-        str_builder_append(&body, STR("}"));
-        respond_json(c, 401, &body, false, NO_STORE);
+        respond_login_failed(c, &after);
         return;
     }
     login_guard_succeeded(&LOGIN_GUARD, &r->client);
     log_login_checked(&client, attempt.username, true, &decision);
-
-    int64_t expires_at = now + TOKEN_LIFETIME_SEC;
-    char headers_buf[SESSION_HEADERS_SIZE];
-    Str_Builder headers;
-    str_builder_init(&headers, headers_buf, sizeof headers_buf);
-    str_builder_append(&headers, STR("Cache-Control: no-store\r\nSet-Cookie: "));
-    str_builder_append(&headers, SESSION_COOKIE);
-    str_builder_append(&headers, STR("="));
-    if (!jwt_issue(&headers, ADMIN_USERNAME, now, expires_at, jwt_key())) {
-        respond_json_error(c, 500, STR("cannot issue token"), NO_STORE);
-        return;
-    }
-    append_cookie_attributes(&headers, TOKEN_LIFETIME_SEC);
-    if (headers.overflow) {
-        respond_json_error(c, 500, STR("cannot issue token"), NO_STORE);
-        return;
-    }
-    Str_Builder body;
-    body_begin(c, &body);
-    str_builder_append(&body, STR("{\"expires_at\":"));
-    str_builder_append_u64(&body, (uint64_t)expires_at);
-    str_builder_append(&body, STR("}"));
-    respond_json(c, 200, &body, false, str_builder_str(&headers));
+    respond_login_succeeded(c, now);
 }
 
 /**
@@ -1249,7 +1271,7 @@ static void api_logout(Conn *c) {
  * The login report: the addresses that must wait or are banned right now
  * (from memory) and the recorded clients and attempts (from the database).
  */
-static Db_Status build_login_report(Worker *w, int64_t now, Str_Builder *body) {
+static DB_Status build_login_report(Worker *w, int64_t now, Str_Builder *body) {
     assert(body != NULL);
     Login_Block blocks[MAX_REPORTED_BLOCKS];
     size_t const count = login_guard_blocks(&LOGIN_GUARD, now, blocks, MAX_REPORTED_BLOCKS);
@@ -1270,7 +1292,7 @@ static Db_Status build_login_report(Worker *w, int64_t now, Str_Builder *body) {
         str_builder_append(body, banned);
     }
     str_builder_append(body, STR("],\"report\":"));
-    Db_Status const status = db_login_report_json(&w->db, body);
+    DB_Status const status = db_login_report_json(&w->db, body);
     if (status != DB_OK) {
         return status;
     }
@@ -1287,7 +1309,7 @@ static void api_login_report(Worker *w, Conn *c, Request const *r) {
     int64_t const now = unix_now();
     Str_Builder body;
     body_begin(c, &body);
-    Db_Status status = build_login_report(w, now, &body);
+    DB_Status status = build_login_report(w, now, &body);
     if (status == DB_TOO_LARGE && big_acquire(w, c)) {
         c->out = c->big;
         c->out_cap = BIG_BUF_SIZE;
@@ -1310,12 +1332,12 @@ static void api_login_unblock(Worker *w, Conn *c, Request const *r, int64_t id) 
     char ip_buf[IP_TEXT_SIZE + 1];
     Str_Builder ip_text;
     str_builder_init(&ip_text, ip_buf, sizeof ip_buf);
-    Db_Status const status = db_clear_login_client(&w->db, id, unix_now(), &ip_text);
+    DB_Status const status = db_clear_login_client(&w->db, id, unix_now(), &ip_text);
     if (status != DB_OK) {
         respond_db_error(c, status);
         return;
     }
-    Ip_Address ip;
+    IP_Address ip;
     if (ip_parse(str_builder_str(&ip_text), &ip)) {
         login_guard_clear(&LOGIN_GUARD, &ip);
     }
@@ -1325,7 +1347,7 @@ static void api_login_unblock(Worker *w, Conn *c, Request const *r, int64_t id) 
 }
 
 static void api_session(Conn *c, Request const *r) {
-    Jwt_Claims claims;
+    JWT_Claims claims;
     if (!authenticate(r, &claims)) {
         respond_unauthorized(c);
         return;
@@ -1346,11 +1368,11 @@ static void api_session(Conn *c, Request const *r) {
  */
 typedef struct {
     Str       path;  /**< Collection path, e.g. "/api/recipes". */
-    Db_Status (*list)(Db *db, Str_Builder *out);
-    Db_Status (*get)(Db *db, int64_t id, Str_Builder *out);
-    Db_Status (*create)(Db *db, Str json, int64_t *id);
-    Db_Status (*update)(Db *db, int64_t id, Str json);
-    Db_Status (*remove)(Db *db, int64_t id);
+    DB_Status (*list)(DB *db, Str_Builder *out);
+    DB_Status (*get)(DB *db, int64_t id, Str_Builder *out);
+    DB_Status (*create)(DB *db, Str json, int64_t *id);
+    DB_Status (*update)(DB *db, int64_t id, Str json);
+    DB_Status (*remove)(DB *db, int64_t id);
 } Resource;
 
 static Resource const RESOURCES[] = {
@@ -1375,7 +1397,7 @@ static Resource const RESOURCES[] = {
 static void api_list(Worker *w, Conn *c, Request const *r, Resource const *res) {
     Str_Builder body;
     body_begin(c, &body);
-    Db_Status status = res->list(&w->db, &body);
+    DB_Status status = res->list(&w->db, &body);
     if (status != DB_OK) {
         respond_db_error(c, status);
         return;
@@ -1386,7 +1408,7 @@ static void api_list(Worker *w, Conn *c, Request const *r, Resource const *res) 
 static void api_get(Worker *w, Conn *c, Request const *r, Resource const *res, int64_t id) {
     Str_Builder body;
     body_begin(c, &body);
-    Db_Status status = res->get(&w->db, id, &body);
+    DB_Status status = res->get(&w->db, id, &body);
     // A long item (a recipe full of blocks) is built again in a large buffer.
     if (status == DB_TOO_LARGE && big_acquire(w, c)) {
         c->out = c->big;
@@ -1407,7 +1429,7 @@ static void api_create(Worker *w, Conn *c, Request const *r, Resource const *res
         return;
     }
     int64_t id;
-    Db_Status status = res->create(&w->db, r->body, &id);
+    DB_Status status = res->create(&w->db, r->body, &id);
     if (status != DB_OK) {
         respond_db_error(c, status);
         return;
@@ -1420,7 +1442,7 @@ static void api_update(Worker *w, Conn *c, Request const *r, Resource const *res
         respond_unauthorized(c);
         return;
     }
-    Db_Status status = res->update(&w->db, id, r->body);
+    DB_Status status = res->update(&w->db, id, r->body);
     if (status != DB_OK) {
         respond_db_error(c, status);
         return;
@@ -1433,7 +1455,7 @@ static void api_delete(Worker *w, Conn *c, Request const *r, Resource const *res
         respond_unauthorized(c);
         return;
     }
-    Db_Status status = res->remove(&w->db, id);
+    DB_Status status = res->remove(&w->db, id);
     if (status != DB_OK) {
         respond_db_error(c, status);
         return;
@@ -1534,7 +1556,7 @@ static void api_upload_image(Worker *w, Conn *c, Request const *r) {
 
     int64_t id;
     Str const original_name = clean_original_name(r->headers->file_name);
-    Db_Status status = db_create_image(&w->db, extension, original_name, (int64_t)r->body.len,
+    DB_Status status = db_create_image(&w->db, extension, original_name, (int64_t)r->body.len,
                                        &id);
     if (status != DB_OK) {
         respond_db_error(c, status);
@@ -1572,7 +1594,7 @@ static void api_list_images(Worker *w, Conn *c, Request const *r) {
     }
     Str_Builder body;
     body_begin(c, &body);
-    Db_Status status = db_list_images_json(&w->db, &body);
+    DB_Status status = db_list_images_json(&w->db, &body);
     if (status == DB_TOO_LARGE && big_acquire(w, c)) {
         c->out = c->big;
         c->out_cap = BIG_BUF_SIZE;
@@ -1594,7 +1616,7 @@ static void api_delete_image(Worker *w, Conn *c, Request const *r, int64_t id) {
     char name_buf[64];
     Str_Builder file_name;
     str_builder_init(&file_name, name_buf, sizeof name_buf);
-    Db_Status status = db_delete_image(&w->db, id, &file_name);
+    DB_Status status = db_delete_image(&w->db, id, &file_name);
     if (status != DB_OK) {
         respond_db_error(c, status);
         return;
@@ -1683,7 +1705,7 @@ static bool handle_resource(Worker *w, Conn *c, Request const *r, Resource const
 static void api_get_recipe_by_slug(Worker *w, Conn *c, Request const *r, Str slug) {
     Str_Builder body;
     body_begin(c, &body);
-    Db_Status status = db_get_recipe_by_slug_json(&w->db, slug, &body);
+    DB_Status status = db_get_recipe_by_slug_json(&w->db, slug, &body);
     if (status == DB_TOO_LARGE && big_acquire(w, c)) {
         c->out = c->big;
         c->out_cap = BIG_BUF_SIZE;
@@ -1905,6 +1927,32 @@ static void route_request(Worker *w, Conn *c, Request const *r) {
  * @param head_len Length of the head with the blank line, in bytes.
  * @return How many buffered bytes the request used, or 0 when it is not complete yet.
  */
+/**
+ * Request headers before any has been read: every field empty.
+ */
+static Request_Headers request_headers_empty(void) {
+    return (Request_Headers) {
+        .close = false,
+        .keepalive = false,
+        .chunked = false,
+        .bad_content_length = false,
+        .content_length = 0,
+        .cookie = STR(""),
+        .sec_fetch_site = STR(""),
+        .file_name = STR(""),
+        .forwarded_for = STR(""),
+        .user_agent = STR(""),
+    };
+}
+
+/**
+ * The request target without its query string or fragment.
+ */
+static Str path_of_target(Str target) {
+    size_t const end = str_find_any(target, STR("?#"));
+    return end == STR_NPOS ? target : str_slice(target, 0, end);
+}
+
 static size_t handle_request(Worker *w, Conn *c, Str head, size_t head_len) {
     Str const buffered = str_make((char const *)c->in, c->req_len);
     Str request_line = head;
@@ -1928,18 +1976,7 @@ static size_t handle_request(Worker *w, Conn *c, Str head, size_t head_len) {
         return head_len;
     }
 
-    Request_Headers h = {
-        .close = false,
-        .keepalive = false,
-        .chunked = false,
-        .bad_content_length = false,
-        .content_length = 0,
-        .cookie = STR(""),
-        .sec_fetch_site = STR(""),
-        .file_name = STR(""),
-        .forwarded_for = STR(""),
-        .user_agent = STR(""),
-    };
+    Request_Headers h = request_headers_empty();
     scan_headers(headers, &h);
     if (h.bad_content_length) {
         respond_error(c, 400, false);
@@ -1961,21 +1998,15 @@ static size_t handle_request(Worker *w, Conn *c, Str head, size_t head_len) {
 
     Request r = {
         .method = method,
-        .path = target,
+        .path = path_of_target(target),
         .body = str_slice(buffered, head_len, request_len),
         .head_only = str_eq(method, STR("HEAD")),
         .headers = &h,
         .client = c->peer,
     };
-    Ip_Address forwarded;
+    IP_Address forwarded;
     if (TRUST_PROXY && ip_from_forwarded_for(h.forwarded_for, &forwarded)) {
         r.client = forwarded;
-    }
-
-    // Strip query string / fragment.
-    size_t const query = str_find_any(r.path, STR("?#"));
-    if (query != STR_NPOS) {
-        r.path = str_slice(r.path, 0, query);
     }
 
     route_request(w, c, &r);
@@ -2047,9 +2078,63 @@ static void conn_close(Worker *w, Conn *c) {
 }
 
 /**
+ * Sends what is left of the response held in memory.
+ *
+ * @return False when the connection has to wait for the socket, or was closed.
+ */
+static bool send_buffered(Worker *w, Conn *c) {
+    while (c->resp_pos < c->resp_end) {
+        ssize_t const n = send(c->fd, c->out + c->resp_pos, c->resp_end - c->resp_pos,
+                               MSG_NOSIGNAL);
+        if (n > 0) {
+            c->resp_pos += (uint32_t)n;
+            continue;
+        }
+        if (n < 0 && errno == EINTR) {
+            continue;
+        }
+        if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+            conn_want(w, c, EPOLLOUT);
+            return false;
+        }
+        conn_close(w, c);
+        return false;
+    }
+    return true;
+}
+
+/**
+ * Sends what is left of the response's file, with the kernel moving the file's pages straight
+ * to the socket.
+ *
+ * @return False when the connection has to wait for the socket, or was closed.
+ */
+static bool send_file_body(Worker *w, Conn *c) {
+    while (c->file_fd >= 0 && c->file_pos < c->file_end) {
+        ssize_t const n = sendfile(c->fd, c->file_fd, &c->file_pos,
+                                   (size_t)(c->file_end - c->file_pos));
+        if (n > 0) {
+            continue;
+        }
+        if (n < 0 && errno == EINTR) {
+            continue;
+        }
+        if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+            conn_want(w, c, EPOLLOUT);
+            return false;
+        }
+        // Error, or the file shrank: Content-Length can no longer be honored.
+        conn_close(w, c);
+        return false;
+    }
+    return true;
+}
+
+/**
  * Drives a connection forward until it needs more input, more socket space, or dies.
  */
 static void conn_advance(Worker *w, Conn *c) {
+    // Each pass answers one request and the input is finite, so the loop ends with it.
     for (;;) {
         if (c->state == ST_READING) {
             if (!build_response(w, c)) {
@@ -2065,40 +2150,7 @@ static void conn_advance(Worker *w, Conn *c) {
             c->state = ST_WRITING;
         }
 
-        while (c->resp_pos < c->resp_end) {
-            ssize_t n = send(c->fd, c->out + c->resp_pos, c->resp_end - c->resp_pos,
-                             MSG_NOSIGNAL);
-            if (n > 0) {
-                c->resp_pos += (uint32_t)n;
-                continue;
-            }
-            if (n < 0 && errno == EINTR) {
-                continue;
-            }
-            if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
-                conn_want(w, c, EPOLLOUT);
-                return;
-            }
-            conn_close(w, c);
-            return;
-        }
-
-        // Zero-copy body: the kernel moves file pages straight to the socket.
-        while (c->file_fd >= 0 && c->file_pos < c->file_end) {
-            ssize_t n = sendfile(c->fd, c->file_fd, &c->file_pos,
-                                 (size_t)(c->file_end - c->file_pos));
-            if (n > 0) {
-                continue;
-            }
-            if (n < 0 && errno == EINTR) {
-                continue;
-            }
-            if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
-                conn_want(w, c, EPOLLOUT);
-                return;
-            }
-            // Error, or the file shrank: Content-Length can no longer be honored.
-            conn_close(w, c);
+        if (!send_buffered(w, c) || !send_file_body(w, c)) {
             return;
         }
         if (c->file_fd >= 0) {
@@ -2257,7 +2309,7 @@ static int make_listener(uint16_t port) {
 // Called for each address with recent failures in the database at startup.
 static void restore_login_failures(void *context, Str ip_text, uint32_t failures,
                                    int64_t last_failure) {
-    Ip_Address ip;
+    IP_Address ip;
     if (ip_parse(ip_text, &ip)) {
         login_guard_restore(&LOGIN_GUARD, &ip, failures, last_failure);
         (*(size_t *)context)++;
@@ -2297,7 +2349,7 @@ typedef struct {
     Str        migrations_dir;
     Str        uploads_dir;
     Str        geoip_path;
-    Db_Storage db_storage;
+    DB_Storage db_storage;
 } Settings;
 
 /**
@@ -2458,7 +2510,7 @@ static int configure_login(Settings const *settings) {
     // Session tokens survive restarts only when the secret is configured.
     Str const secret = str_from_cstr(getenv("KASIN_JWT_SECRET"));
     if (secret.len > 0) {
-        Sha256 key_hash;
+        SHA256 key_hash;
         sha256_init(&key_hash);
         sha256_update(&key_hash, secret.data, secret.len);
         sha256_final(&key_hash, JWT_KEY);

@@ -1,7 +1,7 @@
-#include "login_guard.h"
-
 #include <assert.h>
 #include <string.h>
+
+#include "login_guard.h"
 
 enum {
     /** One more password check is allowed this often, in seconds. */
@@ -33,7 +33,7 @@ static bool is_stale(Login_Guard_Entry const *e, int64_t now) {
 }
 
 // The address's entry with recent failures, or NULL.
-static Login_Guard_Entry *find(Login_Guard *g, Ip_Address const *ip, int64_t now) {
+static Login_Guard_Entry *find(Login_Guard *g, IP_Address const *ip, int64_t now) {
     for (size_t i = 0; i < LOGIN_GUARD_SLOTS; i++) {
         Login_Guard_Entry *e = &g->entries[i];
         if (e->last_failure != 0 && ip_eq(&e->ip, ip)) {
@@ -47,7 +47,7 @@ static Login_Guard_Entry *find(Login_Guard *g, Ip_Address const *ip, int64_t now
  * The address's entry, made if needed: from a free or stale slot, or else the
  * one whose last failure is oldest.
  */
-static Login_Guard_Entry *find_or_add(Login_Guard *g, Ip_Address const *ip, int64_t now) {
+static Login_Guard_Entry *find_or_add(Login_Guard *g, IP_Address const *ip, int64_t now) {
     Login_Guard_Entry *free_slot = NULL;  // The first free or stale slot.
     Login_Guard_Entry *oldest = NULL;     // The live entry with the oldest last failure.
     for (size_t i = 0; i < LOGIN_GUARD_SLOTS; i++) {
@@ -119,7 +119,7 @@ static void count_refusal(uint32_t *refused, int64_t *logged_at, int64_t now, Lo
     }
 }
 
-Login_Decision login_guard_check(Login_Guard *g, Ip_Address const *ip, int64_t now) {
+Login_Decision login_guard_check(Login_Guard *g, IP_Address const *ip, int64_t now) {
     pthread_mutex_lock(&g->lock);
     Login_Decision d = {
         .verdict = LOGIN_ALLOWED,
@@ -152,7 +152,7 @@ Login_Decision login_guard_check(Login_Guard *g, Ip_Address const *ip, int64_t n
     return d;
 }
 
-Login_Decision login_guard_failed(Login_Guard *g, Ip_Address const *ip, int64_t now) {
+Login_Decision login_guard_failed(Login_Guard *g, IP_Address const *ip, int64_t now) {
     pthread_mutex_lock(&g->lock);
     Login_Guard_Entry *e = find_or_add(g, ip, now);
     if (e->failures < UINT32_MAX) {
@@ -164,11 +164,11 @@ Login_Decision login_guard_failed(Login_Guard *g, Ip_Address const *ip, int64_t 
     return d;
 }
 
-void login_guard_succeeded(Login_Guard *g, Ip_Address const *ip) {
+void login_guard_succeeded(Login_Guard *g, IP_Address const *ip) {
     login_guard_clear(g, ip);
 }
 
-void login_guard_restore(Login_Guard *g, Ip_Address const *ip, uint32_t failures,
+void login_guard_restore(Login_Guard *g, IP_Address const *ip, uint32_t failures,
                          int64_t last_failure) {
     if (failures == 0 || last_failure <= 0) {
         return;
@@ -184,7 +184,7 @@ void login_guard_restore(Login_Guard *g, Ip_Address const *ip, uint32_t failures
     pthread_mutex_unlock(&g->lock);
 }
 
-void login_guard_clear(Login_Guard *g, Ip_Address const *ip) {
+void login_guard_clear(Login_Guard *g, IP_Address const *ip) {
     pthread_mutex_lock(&g->lock);
     for (size_t i = 0; i < LOGIN_GUARD_SLOTS; i++) {
         Login_Guard_Entry *e = &g->entries[i];

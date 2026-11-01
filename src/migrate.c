@@ -1,5 +1,3 @@
-#include "migrate.h"
-
 #include <assert.h>
 #include <dirent.h>
 #include <errno.h>
@@ -11,6 +9,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include "migrate.h"
 #include "sql.h"
 #include "str.h"
 
@@ -49,7 +48,7 @@ typedef struct {
 typedef struct {
     char  *bytes;  /**< Freed with sqlite3_free(). */
     size_t len;
-} Sql_Text;
+} SQL_Text;
 
 typedef enum {
     NAME_IGNORED,  /**< Not a .sql file; not a migration. */
@@ -167,7 +166,7 @@ static bool load_migrations(Str dir, Migration *list, int *count) {
  * Reads a migration file into memory from SQLite's heap. Free the bytes with
  * sqlite3_free().
  */
-static bool read_sql(Str dir, Migration const *m, Sql_Text *sql) {
+static bool read_sql(Str dir, Migration const *m, SQL_Text *sql) {
     assert(sql != NULL);
     char path_buf[MAX_FILE_PATH];
     Str_Builder path;
@@ -363,7 +362,7 @@ static bool ensure_migrations_table(sqlite3 *conn, Migration const *list, int co
 }
 
 static bool apply(sqlite3 *conn, Str dir, Migration const *m) {
-    Sql_Text text;
+    SQL_Text text;
     if (!read_sql(dir, m, &text)) {
         return false;
     }

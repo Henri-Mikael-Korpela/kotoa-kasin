@@ -22,7 +22,7 @@ static void check(char const *label, bool ok) {
     }
 }
 
-static void expect_text(char const *label, Ip_Address const *ip, char const *expected) {
+static void expect_text(char const *label, IP_Address const *ip, char const *expected) {
     char buf[IP_TEXT_SIZE];
     Str_Builder text;
     str_builder_init(&text, buf, sizeof buf);
@@ -33,8 +33,8 @@ static void expect_text(char const *label, Ip_Address const *ip, char const *exp
     }
 }
 
-static void expect_country(Geoip const *g, char const *address, char const *expected) {
-    Ip_Address ip;
+static void expect_country(GeoIP const *g, char const *address, char const *expected) {
+    IP_Address ip;
     char country[2];
     if (!ip_parse(str_from_cstr(address), &ip)) {
         printf("FAIL cannot parse %s\n", address);
@@ -61,7 +61,7 @@ static bool write_text(char const *path, char const *text) {
 
 int main(void) {
     // Addresses.
-    Ip_Address ip;
+    IP_Address ip;
     check("parse IPv4", ip_parse(STR("203.0.113.7"), &ip) && ip_is_v4(&ip));
     expect_text("IPv4 written back", &ip, "203.0.113.7");
     check("parse IPv6", ip_parse(STR("2001:DB8::1"), &ip) && !ip_is_v4(&ip));
@@ -101,7 +101,7 @@ int main(void) {
         "2000::,2001:db7:ffff:ffff:ffff:ffff:ffff:ffff,SE\n"
         "2001:db8::,2001:db8:ffff:ffff:ffff:ffff:ffff:ffff,FI\n"));
     check("build", geoip_build_file(csv, bin));
-    Geoip g;
+    GeoIP g;
     check("open", geoip_open(&g, bin));
     check("same-country ranges merged", g.v4_count == 6);  // ZZ AU CN ZZ(gap) FI ZZ(after)
     expect_country(&g, "0.1.2.3", NULL);

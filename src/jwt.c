@@ -1,8 +1,7 @@
-#include "jwt.h"
-
 #include <assert.h>
 #include <string.h>
 
+#include "jwt.h"
 #include "sha256.h"
 
 // base64url('{"alg":"HS256","typ":"JWT"}').
@@ -152,7 +151,7 @@ bool jwt_issue(Str_Builder *out, Str subject, int64_t issued_at, int64_t expires
     return sign(out, signing_input, key);
 }
 
-bool jwt_verify(Str token, Str key, int64_t now, Jwt_Claims *claims) {
+bool jwt_verify(Str token, Str key, int64_t now, JWT_Claims *claims) {
     Str header;
     Str rest;
     Str payload_b64;

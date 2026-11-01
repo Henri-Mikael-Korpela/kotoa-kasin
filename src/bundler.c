@@ -1,5 +1,3 @@
-#include "bundler.h"
-
 #include <assert.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -13,6 +11,8 @@
 #include <sysexits.h>
 #include <time.h>
 #include <unistd.h>
+
+#include "bundler.h"
 
 enum {
     /** Memory the tool reserves at startup, in bytes. */

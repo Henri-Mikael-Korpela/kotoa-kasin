@@ -20,8 +20,8 @@ static void check(char const *label, bool ok) {
     }
 }
 
-static Ip_Address address(char const *text) {
-    Ip_Address ip;
+static IP_Address address(char const *text) {
+    IP_Address ip;
     if (!ip_parse(str_from_cstr(text), &ip)) {
         printf("FAIL cannot parse %s\n", text);
         FAILURES++;
@@ -30,7 +30,7 @@ static Ip_Address address(char const *text) {
 }
 
 // Fails n times in a row, each when allowed, starting at *now; returns the last decision.
-static Login_Decision fail_times(Ip_Address const *ip, int n, int64_t *now) {
+static Login_Decision fail_times(IP_Address const *ip, int n, int64_t *now) {
     Login_Decision d = {
         .verdict = LOGIN_ALLOWED,
     };
@@ -58,9 +58,9 @@ int main(void) {
 
     int64_t now = 1000000;
     login_guard_init(&GUARD, now);
-    Ip_Address const attacker = address("203.0.113.7");
-    Ip_Address const admin = address("198.51.100.20");
-    Ip_Address const v6 = address("2001:db8::1");
+    IP_Address const attacker = address("203.0.113.7");
+    IP_Address const admin = address("198.51.100.20");
+    IP_Address const v6 = address("2001:db8::1");
 
     // Three free failures, then a wait that is enforced.
     Login_Decision d = fail_times(&attacker, 3, &now);
@@ -130,7 +130,7 @@ int main(void) {
             2,
             (uint8_t)i,
         };
-        Ip_Address const ip = ip_from_v4(bytes);
+        IP_Address const ip = ip_from_v4(bytes);
         d = login_guard_check(&GUARD, &ip, now);
         if (d.verdict == LOGIN_ALLOWED) {
             allowed++;
@@ -160,7 +160,7 @@ int main(void) {
             (uint8_t)(i >> 8),
             (uint8_t)i,
         };
-        Ip_Address const ip = ip_from_v4(bytes);
+        IP_Address const ip = ip_from_v4(bytes);
         login_guard_failed(&GUARD, &ip, i == 0 ? now : now + 1);  // 10.0.0.0 is the oldest.
     }
     d = login_guard_failed(&GUARD, &attacker, now + 2);
@@ -171,7 +171,7 @@ int main(void) {
         0,
         0,
     };
-    Ip_Address const oldest = ip_from_v4(first);
+    IP_Address const oldest = ip_from_v4(first);
     d = login_guard_failed(&GUARD, &oldest, now + 3);
     check("the oldest was the one dropped", d.failures == 1);
     uint8_t const later[4] = {
@@ -180,7 +180,7 @@ int main(void) {
         0,
         5,
     };
-    Ip_Address const kept = ip_from_v4(later);
+    IP_Address const kept = ip_from_v4(later);
     d = login_guard_failed(&GUARD, &kept, now + 4);
     check("others kept their failures", d.failures == 2);
 

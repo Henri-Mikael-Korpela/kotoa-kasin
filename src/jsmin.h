@@ -24,7 +24,7 @@
 typedef struct {
     Str    name;  /**< The declared name, a slice of the source. */
     size_t line;  /**< 1-based line of the declaration. */
-} Js_Name;
+} JS_Name;
 
 /**
  * Minifies JavaScript source code.
@@ -51,7 +51,7 @@ bool js_minify(Str source, Str_Builder *out, Minify_Error *error);
  *              there are more names than fit.
  * @return True on success.
  */
-bool js_top_level_names(Str source, Js_Name *names, size_t capacity, size_t *count,
+bool js_top_level_names(Str source, JS_Name *names, size_t capacity, size_t *count,
                         Minify_Error *error);
 
 #endif  // __KASIN_JSMIN_H__

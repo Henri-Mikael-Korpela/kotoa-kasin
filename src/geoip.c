@@ -1,5 +1,3 @@
-#include "geoip.h"
-
 #include <assert.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -9,12 +7,14 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include "geoip.h"
+
 static uint32_t read_u32_le(uint8_t const *p) {
     return (uint32_t)p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24;
 }
 
-static void clear(Geoip *g) {
-    *g = (Geoip) {
+static void clear(GeoIP *g) {
+    *g = (GeoIP) {
         .map = NULL,
         .region = NULL,
         .map_size = 0,
@@ -27,7 +27,7 @@ static void clear(Geoip *g) {
     };
 }
 
-bool geoip_open(Geoip *g, char const *path) {
+bool geoip_open(GeoIP *g, char const *path) {
     assert(g != NULL);
     assert(path != NULL);
     clear(g);
@@ -70,7 +70,7 @@ bool geoip_open(Geoip *g, char const *path) {
     return true;
 }
 
-void geoip_close(Geoip *g) {
+void geoip_close(GeoIP *g) {
     if (g->region != NULL) {
         munmap(g->region, g->map_size);
     }
@@ -96,7 +96,7 @@ static int64_t find_range(uint8_t const *starts, uint32_t count, size_t width, u
     return found;
 }
 
-bool geoip_country(Geoip const *g, Ip_Address const *ip, char country[2]) {
+bool geoip_country(GeoIP const *g, IP_Address const *ip, char country[2]) {
     assert(country != NULL);
     if (g->map == NULL) {
         return false;

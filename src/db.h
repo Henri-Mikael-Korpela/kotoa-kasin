@@ -14,10 +14,11 @@
 #ifndef __KASIN_DB_H__
 #define __KASIN_DB_H__
 
-#include <sqlite3.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+
+#include <sqlite3.h>
 
 #include "str.h"
 
@@ -29,7 +30,7 @@ typedef enum {
     DB_TOO_LARGE,  /**< The result did not fit in the output buffer. */
     DB_BUSY,       /**< The database stayed locked by another writer. */
     DB_ERROR,
-} Db_Status;
+} DB_Status;
 
 /**
  * Where the database file lives. Local disks support SQLite's normal POSIX file
@@ -40,7 +41,7 @@ typedef enum {
 typedef enum {
     DB_STORAGE_LOCAL,
     DB_STORAGE_SHARE,
-} Db_Storage;
+} DB_Storage;
 
 typedef struct {
     sqlite3      *conn;
@@ -69,7 +70,7 @@ typedef struct {
     sqlite3_stmt *login_report;
     sqlite3_stmt *recent_login_failures;
     sqlite3_stmt *clear_login_client;
-} Db;
+} DB;
 
 /**
  * A login attempt to record: one password check.
@@ -81,7 +82,7 @@ typedef struct {
     Str     user_agent;  /**< The browser's User-Agent header, at most 300 bytes. */
     bool    succeeded;
     int64_t at;          /**< Unix seconds. */
-} Db_Login_Attempt;
+} DB_Login_Attempt;
 
 /**
  * Hands SQLite its heap and initializes the library. Call once, before any
@@ -102,7 +103,7 @@ bool db_global_init(void *heap_mem, size_t heap_size);
  * @param migrations_dir Directory of <number>__<name>.sql migration files.
  * @return False on failure, after printing why.
  */
-bool db_prepare_file(Str path, Db_Storage storage, Str migrations_dir);
+bool db_prepare_file(Str path, DB_Storage storage, Str migrations_dir);
 
 /**
  * Opens a connection for the calling thread and prepares its statements.
@@ -110,12 +111,12 @@ bool db_prepare_file(Str path, Db_Storage storage, Str migrations_dir);
  * @param storage Must match what was passed to db_prepare_file().
  * @return False on failure, after printing why.
  */
-bool db_open(Db *db, Str path, Db_Storage storage);
+bool db_open(DB *db, Str path, DB_Storage storage);
 
 /**
  * Finalizes statements and closes the connection.
  */
-void db_close(Db *db);
+void db_close(DB *db);
 
 /**
  * Appends all recipes as a JSON array of
@@ -123,24 +124,24 @@ void db_close(Db *db);
  * from the start of the description (its first paragraph block), so the list
  * stays small however long the descriptions are.
  */
-Db_Status db_list_recipes_json(Db *db, Str_Builder *out);
+DB_Status db_list_recipes_json(DB *db, Str_Builder *out);
 
 /**
  * Appends one recipe as a JSON object.
  */
-Db_Status db_get_recipe_json(Db *db, int64_t id, Str_Builder *out);
+DB_Status db_get_recipe_json(DB *db, int64_t id, Str_Builder *out);
 
 /**
  * Appends the recipe with the given slug as a JSON object.
  */
-Db_Status db_get_recipe_by_slug_json(Db *db, Str slug, Str_Builder *out);
+DB_Status db_get_recipe_by_slug_json(DB *db, Str slug, Str_Builder *out);
 
 /**
  * Checks whether a recipe has the given slug.
  *
  * @param exists Receives the answer.
  */
-Db_Status db_recipe_slug_exists(Db *db, Str slug, bool *exists);
+DB_Status db_recipe_slug_exists(DB *db, Str slug, bool *exists);
 
 /**
  * Inserts a recipe from a JSON object with slug, name, image, description and
@@ -149,30 +150,30 @@ Db_Status db_recipe_slug_exists(Db *db, Str slug, bool *exists);
  * @param id Receives the new recipe's id.
  * @return DB_CONFLICT when another recipe has the slug.
  */
-Db_Status db_create_recipe(Db *db, Str json, int64_t *id);
+DB_Status db_create_recipe(DB *db, Str json, int64_t *id);
 
 /**
  * Replaces a recipe's fields from a JSON object like db_create_recipe() takes.
  *
  * @return DB_CONFLICT when another recipe has the slug.
  */
-Db_Status db_update_recipe(Db *db, int64_t id, Str json);
+DB_Status db_update_recipe(DB *db, int64_t id, Str json);
 
 /**
  * Deletes a recipe.
  */
-Db_Status db_delete_recipe(Db *db, int64_t id);
+DB_Status db_delete_recipe(DB *db, int64_t id);
 
 /**
  * Appends all categories, alphabetically, as a JSON array of
  * {id, name, recipe_count}.
  */
-Db_Status db_list_categories_json(Db *db, Str_Builder *out);
+DB_Status db_list_categories_json(DB *db, Str_Builder *out);
 
 /**
  * Appends one category as a JSON object.
  */
-Db_Status db_get_category_json(Db *db, int64_t id, Str_Builder *out);
+DB_Status db_get_category_json(DB *db, int64_t id, Str_Builder *out);
 
 /**
  * Inserts a category from a JSON object with a name.
@@ -180,28 +181,28 @@ Db_Status db_get_category_json(Db *db, int64_t id, Str_Builder *out);
  * @param id Receives the new category's id.
  * @return DB_CONFLICT when the name is already taken (ignoring case).
  */
-Db_Status db_create_category(Db *db, Str json, int64_t *id);
+DB_Status db_create_category(DB *db, Str json, int64_t *id);
 
 /**
  * Renames a category from a JSON object with a name.
  *
  * @return DB_CONFLICT when the name is already taken (ignoring case).
  */
-Db_Status db_update_category(Db *db, int64_t id, Str json);
+DB_Status db_update_category(DB *db, int64_t id, Str json);
 
 /**
  * Deletes a category.
  *
  * @return DB_CONFLICT while recipes still belong to it.
  */
-Db_Status db_delete_category(Db *db, int64_t id);
+DB_Status db_delete_category(DB *db, int64_t id);
 
 /**
  * Appends all uploaded images, newest first, as a JSON array of
  * {id, url, original_name, size, created_at, used, recipes}, where used counts
  * the recipes that show the image and recipes lists them as {id, name}.
  */
-Db_Status db_list_images_json(Db *db, Str_Builder *out);
+DB_Status db_list_images_json(DB *db, Str_Builder *out);
 
 /**
  * Records an uploaded image before its file is written.
@@ -211,7 +212,7 @@ Db_Status db_list_images_json(Db *db, Str_Builder *out);
  * @param size File size in bytes.
  * @param id Receives the image's id; the file is named <id>.<extension>.
  */
-Db_Status db_create_image(Db *db, Str extension, Str original_name, int64_t size, int64_t *id);
+DB_Status db_create_image(DB *db, Str extension, Str original_name, int64_t size, int64_t *id);
 
 /**
  * Deletes an image's record, unless a recipe still shows it.
@@ -219,13 +220,13 @@ Db_Status db_create_image(Db *db, Str extension, Str original_name, int64_t size
  * @param file_name Receives the image's file name, for removing the file.
  * @return DB_CONFLICT while a recipe uses the image.
  */
-Db_Status db_delete_image(Db *db, int64_t id, Str_Builder *file_name);
+DB_Status db_delete_image(DB *db, int64_t id, Str_Builder *file_name);
 
 /**
  * Deletes an image's record without checking whether it is used; for undoing
  * db_create_image() when the file could not be written.
  */
-Db_Status db_forget_image(Db *db, int64_t id);
+DB_Status db_forget_image(DB *db, int64_t id);
 
 /**
  * Extracts the string fields username and password from a JSON object.
@@ -233,13 +234,13 @@ Db_Status db_forget_image(Db *db, int64_t id);
  * @param username Receives the username.
  * @param password Receives the password.
  */
-Db_Status db_parse_login(Db *db, Str json, Str_Builder *username, Str_Builder *password);
+DB_Status db_parse_login(DB *db, Str json, Str_Builder *username, Str_Builder *password);
 
 /**
  * Records a login attempt under its client (made on its first attempt), and
  * removes clients and attempts older than 90 days. One transaction.
  */
-Db_Status db_record_login(Db *db, Db_Login_Attempt const *attempt);
+DB_Status db_record_login(DB *db, DB_Login_Attempt const *attempt);
 
 /**
  * Writes the admin's view of the logins: {"clients": [...], "attempts": [...]}
@@ -248,26 +249,26 @@ Db_Status db_record_login(Db *db, Db_Login_Attempt const *attempt);
  *   clients:  {id, ip, country, first_seen, last_seen, failures, successes, last_failure}
  *   attempts: {id, client_id, at, ip, country, username, user_agent, succeeded}
  */
-Db_Status db_login_report_json(Db *db, Str_Builder *out);
+DB_Status db_login_report_json(DB *db, Str_Builder *out);
 
 /**
  * Receives one address's recent failed logins: the address in text form, how many there are and
  * when the last one was, in Unix seconds. See db_recent_login_failures().
  */
-typedef void (*Db_Failure_Callback)(void *context, Str ip, uint32_t failures, int64_t last_failure);
+typedef void (*DB_Failure_Callback)(void *context, Str ip, uint32_t failures, int64_t last_failure);
 
 /**
  * Calls each() for every address with failed logins since a time that still
  * count towards a wait or ban: those after its last successful login and
  * after an admin last lifted its block. Used to restore the limits at startup.
  */
-Db_Status db_recent_login_failures(Db *db, int64_t since, Db_Failure_Callback each, void *context);
+DB_Status db_recent_login_failures(DB *db, int64_t since, DB_Failure_Callback each, void *context);
 
 /**
  * Lifts a client's block: its failures so far no longer count.
  *
  * @param ip Receives the client's address.
  */
-Db_Status db_clear_login_client(Db *db, int64_t id, int64_t now, Str_Builder *ip);
+DB_Status db_clear_login_client(DB *db, int64_t id, int64_t now, Str_Builder *ip);
 
 #endif  // __KASIN_DB_H__

@@ -1,8 +1,8 @@
-#include "ip.h"
-
 #include <arpa/inet.h>
 #include <assert.h>
 #include <string.h>
+
+#include "ip.h"
 
 // ::ffff:0:0/96, the prefix of IPv4-mapped addresses.
 static uint8_t const V4_MAPPED_PREFIX[12] = {
@@ -20,15 +20,16 @@ static uint8_t const V4_MAPPED_PREFIX[12] = {
     0xff,
 };
 
-Ip_Address ip_from_v4(uint8_t const bytes[4]) {
-    Ip_Address ip;
+IP_Address ip_from_v4(uint8_t const bytes[4]) {
+    IP_Address ip;
     memcpy(ip.bytes, V4_MAPPED_PREFIX, sizeof V4_MAPPED_PREFIX);
     memcpy(ip.bytes + 12, bytes, 4);
     return ip;
 }
 
-bool ip_parse(Str text, Ip_Address *out) {
+bool ip_parse(Str text, IP_Address *out) {
     assert(out != NULL);
+
     char buf[IP_TEXT_SIZE];  // inet_pton() needs a NUL-terminated string.
     if (!str_to_cstr(text, buf, sizeof buf)) {
         return false;
@@ -41,12 +42,13 @@ bool ip_parse(Str text, Ip_Address *out) {
     return inet_pton(AF_INET6, buf, out->bytes) == 1;
 }
 
-bool ip_is_v4(Ip_Address const *ip) {
+bool ip_is_v4(IP_Address const *ip) {
     return memcmp(ip->bytes, V4_MAPPED_PREFIX, sizeof V4_MAPPED_PREFIX) == 0;
 }
 
-void ip_format(Ip_Address const *ip, Str_Builder *out) {
+void ip_format(IP_Address const *ip, Str_Builder *out) {
     assert(out != NULL);
+
     char buf[IP_TEXT_SIZE];
     bool const v4 = ip_is_v4(ip);
     int const family = v4 ? AF_INET : AF_INET6;
@@ -58,11 +60,11 @@ void ip_format(Ip_Address const *ip, Str_Builder *out) {
     str_builder_append(out, str_from_cstr(buf));
 }
 
-bool ip_eq(Ip_Address const *a, Ip_Address const *b) {
+bool ip_eq(IP_Address const *a, IP_Address const *b) {
     return memcmp(a->bytes, b->bytes, sizeof a->bytes) == 0;
 }
 
-bool ip_from_forwarded_for(Str header, Ip_Address *out) {
+bool ip_from_forwarded_for(Str header, IP_Address *out) {
     assert(out != NULL);
     size_t const comma = str_rfind_char(header, ',');
     Str const last = comma == STR_NPOS ? header : str_slice(header, comma + 1, header.len);

@@ -6,8 +6,9 @@
 #ifndef __KASIN_SQL_H__
 #define __KASIN_SQL_H__
 
-#include <sqlite3.h>
 #include <stdbool.h>
+
+#include <sqlite3.h>
 
 #include "str.h"
 

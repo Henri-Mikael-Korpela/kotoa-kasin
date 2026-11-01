@@ -1,7 +1,7 @@
-#include "jsmin.h"
-
 #include <assert.h>
 #include <stdint.h>
+
+#include "jsmin.h"
 
 enum {
     /** Deepest nesting of braces and template substitutions the lexer follows. */
@@ -228,11 +228,11 @@ static bool regex_allowed(Token const *prev) {
         case TOKEN_TEMPLATE_HEAD:
         case TOKEN_TEMPLATE_MIDDLE:
             return true;
-        case TOKEN_WORD:
-            return is_one_of(prev->text, REGEX_KEYWORDS, COUNT_OF(REGEX_KEYWORDS));
         case TOKEN_PUNCT:
             return !(token_is(prev, STR(")")) || token_is(prev, STR("]")) ||
                      token_is(prev, STR("++")) || token_is(prev, STR("--")));
+        case TOKEN_WORD:
+            return is_one_of(prev->text, REGEX_KEYWORDS, COUNT_OF(REGEX_KEYWORDS));
         default:
             return false;
     }
@@ -532,12 +532,12 @@ static void lexer_init(Lexer *lx, Str source, Minify_Error *error) {
  */
 static bool can_end_statement(Token const *t) {
     switch (t->kind) {
-        case TOKEN_WORD:
         case TOKEN_NUMBER:
-        case TOKEN_STRING:
         case TOKEN_REGEX:
+        case TOKEN_STRING:
         case TOKEN_TEMPLATE:
         case TOKEN_TEMPLATE_TAIL:
+        case TOKEN_WORD:
             return true;
         case TOKEN_PUNCT:
             return token_is(t, STR(")")) || token_is(t, STR("]")) || token_is(t, STR("}")) ||
@@ -552,12 +552,12 @@ static bool can_end_statement(Token const *t) {
  */
 static bool can_start_statement(Token const *t) {
     switch (t->kind) {
-        case TOKEN_WORD:
         case TOKEN_NUMBER:
-        case TOKEN_STRING:
         case TOKEN_REGEX:
+        case TOKEN_STRING:
         case TOKEN_TEMPLATE:
         case TOKEN_TEMPLATE_HEAD:
+        case TOKEN_WORD:
             return true;
         case TOKEN_PUNCT:
             return token_is(t, STR("(")) || token_is(t, STR("[")) || token_is(t, STR("{")) ||
@@ -697,7 +697,7 @@ bool js_minify(Str source, Str_Builder *out, Minify_Error *error) {
  * The names found so far, in the caller's array.
  */
 typedef struct {
-    Js_Name *names;
+    JS_Name *names;
     size_t   capacity;
     size_t  *count;  /**< The caller's counter, updated as names are added. */
 } Name_List;
@@ -708,7 +708,7 @@ static bool add_name(Name_List *list, Str source, Token const *t, Minify_Error *
     if (*list->count == list->capacity) {
         return fail(error, source, t->offset, STR("too many top-level names"));
     }
-    list->names[*list->count] = (Js_Name) {
+    list->names[*list->count] = (JS_Name) {
         .name = t->text,
         .line = line_of(source, t->offset),
     };
@@ -716,7 +716,7 @@ static bool add_name(Name_List *list, Str source, Token const *t, Minify_Error *
     return true;
 }
 
-bool js_top_level_names(Str source, Js_Name *names, size_t capacity, size_t *count,
+bool js_top_level_names(Str source, JS_Name *names, size_t capacity, size_t *count,
                         Minify_Error *error) {
     assert(names != NULL);
     assert(count != NULL);

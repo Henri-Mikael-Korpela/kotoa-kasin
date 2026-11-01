@@ -51,7 +51,7 @@ typedef struct {
     uint8_t const *v4_countries;
     uint8_t const *v6_starts;
     uint8_t const *v6_countries;
-} Geoip;
+} GeoIP;
 
 /**
  * Maps a file made by kasin-geoip.
@@ -59,9 +59,9 @@ typedef struct {
  * @return False, with a message on stderr, when it cannot be read or is not
  *         such a file; g is then empty and every lookup says unknown.
  */
-bool geoip_open(Geoip *g, char const *path);
+bool geoip_open(GeoIP *g, char const *path);
 
-void geoip_close(Geoip *g);
+void geoip_close(GeoIP *g);
 
 /**
  * Finds the country of an address.
@@ -70,6 +70,6 @@ void geoip_close(Geoip *g);
  * @return False when the country is unknown: no data, or a reserved or
  *         private range.
  */
-bool geoip_country(Geoip const *g, Ip_Address const *ip, char country[2]);
+bool geoip_country(GeoIP const *g, IP_Address const *ip, char country[2]);
 
 #endif  // __KASIN_GEOIP_H__

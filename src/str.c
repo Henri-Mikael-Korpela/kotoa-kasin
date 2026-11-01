@@ -1,7 +1,7 @@
-#include "str.h"
-
 #include <assert.h>
 #include <string.h>
+
+#include "str.h"
 
 static char ascii_lower(char c) {
     if (c >= 'A' && c <= 'Z') {

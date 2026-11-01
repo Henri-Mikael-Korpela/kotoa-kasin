@@ -16,8 +16,9 @@
 #ifndef __KASIN_MIGRATE_H__
 #define __KASIN_MIGRATE_H__
 
-#include <sqlite3.h>
 #include <stdbool.h>
+
+#include <sqlite3.h>
 
 #include "str.h"
 

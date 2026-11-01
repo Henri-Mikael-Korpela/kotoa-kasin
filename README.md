@@ -55,4 +55,11 @@ password first; see [Running locally](docs/local-development.md).
 | [Server options](docs/server-options.md) | Command line, environment variables and build-time limits |
 | [API](docs/api.md) | The JSON endpoints |
 
-The code style rules are in [CLAUDE.md](CLAUDE.md).
+### Code style
+
+| Document | Contents |
+|---|---|
+| [Programming mindset](docs/programming-mindset.md) | How to approach a change: simplicity, dependencies, performance and memory |
+| [C programming style guide](docs/c-programming-style-guide.md) | Layout, naming, strings, assertions, error handling and the other C rules |
+
+The short, checkable form of the C and JavaScript rules is in [CLAUDE.md](CLAUDE.md).

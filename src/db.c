@@ -1,10 +1,9 @@
-#include "db.h"
-
 #include <assert.h>
 #include <stdio.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include "db.h"
 #include "buddy.h"
 #include "migrate.h"
 #include "sql.h"
@@ -87,12 +86,12 @@ bool db_global_init(void *heap_mem, size_t heap_size) {
  * on network shares that cannot do POSIX byte-range locks. It also keeps other
  * processes out, such as the old revision while a new one starts.
  */
-static char const *vfs_for(Db_Storage storage) {
+static char const *vfs_for(DB_Storage storage) {
     // sqlite3_open_v2() takes a C string; NULL selects the default VFS.
     return storage == DB_STORAGE_SHARE ? "unix-dotfile" : NULL;
 }
 
-static bool open_connection(sqlite3 **conn, Str path, Db_Storage storage) {
+static bool open_connection(sqlite3 **conn, Str path, DB_Storage storage) {
     assert(conn != NULL);
     char path_z[MAX_FILE_PATH];  // sqlite3_open_v2() needs a NUL-terminated path.
     if (!str_to_cstr(path, path_z, sizeof path_z)) {
@@ -140,7 +139,7 @@ static void clear_stale_lock(Str path) {
     }
 }
 
-bool db_prepare_file(Str path, Db_Storage storage, Str migrations_dir) {
+bool db_prepare_file(Str path, DB_Storage storage, Str migrations_dir) {
     if (storage == DB_STORAGE_SHARE) {
         clear_stale_lock(path);
     }
@@ -260,13 +259,113 @@ bool db_prepare_file(Str path, Db_Storage storage, Str migrations_dir) {
     "  FROM login_attempts a JOIN login_clients c ON c.id = a.client_id"                 \
     "  ORDER BY a.at DESC, a.id DESC LIMIT 300)))"
 
-static bool prepare(Db *db, sqlite3_stmt **stmt, Str sql) {
+static bool prepare(DB *db, sqlite3_stmt **stmt, Str sql) {
     return sql_prepare(db->conn, stmt, sql, true);
 }
 
-bool db_open(Db *db, Str path, Db_Storage storage) {
+/**
+ * Prepares the statements for recipes and for the JSON checks they need.
+ */
+static bool prepare_recipe_statements(DB *db) {
+    return prepare(db, &db->is_json_object,
+                STR("SELECT CASE WHEN json_valid(?1) THEN json_type(?1) = 'object' ELSE 0 END")) &&
+        prepare(db, &db->list_recipes,
+                STR("SELECT json_group_array(json(recipe)) FROM ("
+                " SELECT " RECIPE_SUMMARY_JSON " AS recipe"
+                " FROM recipes r JOIN categories c ON c.id = r.category_id ORDER BY r.id)")) &&
+        prepare(db, &db->get_recipe,
+                STR("SELECT " RECIPE_JSON
+                " FROM recipes r JOIN categories c ON c.id = r.category_id WHERE r.id = ?1")) &&
+        prepare(db, &db->get_recipe_by_slug,
+                STR("SELECT " RECIPE_JSON
+                " FROM recipes r JOIN categories c ON c.id = r.category_id WHERE r.slug = ?1")) &&
+        prepare(db, &db->find_recipe_slug, STR("SELECT 1 FROM recipes WHERE slug = ?1")) &&
+        prepare(db, &db->insert_recipe,
+                STR("INSERT INTO recipes (category_id, slug, name, image, description) VALUES ("
+                INTEGER_FIELD("1", "category_id") ", "
+                TEXT_FIELD("1", "slug", "NULL") ", "
+                TEXT_FIELD("1", "name", "NULL") ", "
+                TEXT_FIELD("1", "image", "''") ", "
+                TEXT_FIELD("1", "description", "''") ")"
+                " RETURNING id")) &&
+        prepare(db, &db->update_recipe,
+                STR("UPDATE recipes SET"
+                " category_id = " INTEGER_FIELD("2", "category_id") ","
+                " slug = " TEXT_FIELD("2", "slug", "NULL") ","
+                " name = " TEXT_FIELD("2", "name", "NULL") ","
+                " image = " TEXT_FIELD("2", "image", "''") ","
+                " description = " TEXT_FIELD("2", "description", "''")
+                " WHERE id = ?1")) &&
+        prepare(db, &db->delete_recipe, STR("DELETE FROM recipes WHERE id = ?1"));
+}
+
+/**
+ * Prepares the statements for categories and images.
+ */
+static bool prepare_category_and_image_statements(DB *db) {
+    return prepare(db, &db->list_categories,
+                STR("SELECT json_group_array(json(category)) FROM ("
+                " SELECT " CATEGORY_JSON " AS category"
+                " FROM categories c ORDER BY c.name COLLATE NOCASE)")) &&
+        prepare(db, &db->get_category,
+                STR("SELECT " CATEGORY_JSON " FROM categories c WHERE c.id = ?1")) &&
+        prepare(db, &db->insert_category,
+                STR("INSERT INTO categories (name) VALUES (trim("
+                TEXT_FIELD("1", "name", "NULL") "))"
+                " RETURNING id")) &&
+        prepare(db, &db->update_category,
+                STR("UPDATE categories SET name = trim(" TEXT_FIELD("2", "name", "NULL") ")"
+                " WHERE id = ?1")) &&
+        prepare(db, &db->delete_category, STR("DELETE FROM categories WHERE id = ?1")) &&
+        prepare(db, &db->list_images,
+                STR("SELECT json_group_array(json(image)) FROM ("
+                " SELECT json_object('id', i.id, 'url', " IMAGE_URL ","
+                " 'original_name', i.original_name, 'size', i.size,"
+                " 'created_at', i.created_at, 'used', " IMAGE_USE_COUNT ","
+                " 'recipes', json(" IMAGE_RECIPES ")) AS image"
+                " FROM images i ORDER BY i.id DESC)")) &&
+        prepare(db, &db->find_image,
+                STR("SELECT i.extension, " IMAGE_USE_COUNT " FROM images i WHERE i.id = ?1")) &&
+        prepare(db, &db->insert_image,
+                STR("INSERT INTO images (extension, original_name, size) VALUES (?1, ?2, ?3)"
+                " RETURNING id")) &&
+        prepare(db, &db->delete_image, STR("DELETE FROM images WHERE id = ?1"));
+}
+
+/**
+ * Prepares the statements for logins and their report.
+ */
+static bool prepare_login_statements(DB *db) {
+    return prepare(db, &db->parse_login,
+                STR("SELECT json_extract(?1, '$.username'), json_extract(?1, '$.password')")) &&
+        prepare(db, &db->upsert_login_client,
+                STR("INSERT INTO login_clients (ip, country, first_seen, last_seen)"
+                " VALUES (?1, nullif(?2, ''), ?3, ?3)"
+                " ON CONFLICT (ip) DO UPDATE SET last_seen = excluded.last_seen,"
+                " country = coalesce(excluded.country, login_clients.country)"
+                " RETURNING id")) &&
+        prepare(db, &db->insert_login_attempt,
+                STR("INSERT INTO login_attempts (client_id, at, username, user_agent, succeeded)"
+                " VALUES (?1, ?2, ?3, ?4, ?5)")) &&
+        prepare(db, &db->prune_login_attempts, STR("DELETE FROM login_attempts WHERE at < ?1")) &&
+        prepare(db, &db->prune_login_clients,
+                STR("DELETE FROM login_clients WHERE last_seen < ?1")) &&
+        prepare(db, &db->login_report, STR(LOGIN_REPORT_SQL)) &&
+        prepare(db, &db->recent_login_failures,
+                STR("SELECT c.ip, count(*), max(a.at)"
+                " FROM login_attempts a JOIN login_clients c ON c.id = a.client_id"
+                " WHERE a.succeeded = 0 AND a.at >= ?1 AND a.at > c.cleared_at"
+                // By id, not time: a failure in the same second as a success may come after it.
+                " AND a.id > coalesce((SELECT max(s.id) FROM login_attempts s"
+                " WHERE s.client_id = c.id AND s.succeeded = 1), 0)"
+                " GROUP BY c.id")) &&
+        prepare(db, &db->clear_login_client,
+                STR("UPDATE login_clients SET cleared_at = ?2 WHERE id = ?1 RETURNING ip"));
+}
+
+bool db_open(DB *db, Str path, DB_Storage storage) {
     assert(db != NULL);
-    *db = (Db) {
+    *db = (DB) {
         .conn = NULL,
         .is_json_object = NULL,
         .list_recipes = NULL,
@@ -299,96 +398,16 @@ bool db_open(Db *db, Str path, Db_Storage storage) {
         db_close(db);
         return false;
     }
-    bool ok =
-        prepare(db, &db->is_json_object,
-                STR("SELECT CASE WHEN json_valid(?1) THEN json_type(?1) = 'object' ELSE 0 END")) &&
-        prepare(db, &db->list_recipes,
-                STR("SELECT json_group_array(json(recipe)) FROM ("
-                " SELECT " RECIPE_SUMMARY_JSON " AS recipe"
-                " FROM recipes r JOIN categories c ON c.id = r.category_id ORDER BY r.id)")) &&
-        prepare(db, &db->get_recipe,
-                STR("SELECT " RECIPE_JSON
-                " FROM recipes r JOIN categories c ON c.id = r.category_id WHERE r.id = ?1")) &&
-        prepare(db, &db->get_recipe_by_slug,
-                STR("SELECT " RECIPE_JSON
-                " FROM recipes r JOIN categories c ON c.id = r.category_id WHERE r.slug = ?1")) &&
-        prepare(db, &db->find_recipe_slug, STR("SELECT 1 FROM recipes WHERE slug = ?1")) &&
-        prepare(db, &db->insert_recipe,
-                STR("INSERT INTO recipes (category_id, slug, name, image, description) VALUES ("
-                INTEGER_FIELD("1", "category_id") ", "
-                TEXT_FIELD("1", "slug", "NULL") ", "
-                TEXT_FIELD("1", "name", "NULL") ", "
-                TEXT_FIELD("1", "image", "''") ", "
-                TEXT_FIELD("1", "description", "''") ")"
-                " RETURNING id")) &&
-        prepare(db, &db->update_recipe,
-                STR("UPDATE recipes SET"
-                " category_id = " INTEGER_FIELD("2", "category_id") ","
-                " slug = " TEXT_FIELD("2", "slug", "NULL") ","
-                " name = " TEXT_FIELD("2", "name", "NULL") ","
-                " image = " TEXT_FIELD("2", "image", "''") ","
-                " description = " TEXT_FIELD("2", "description", "''")
-                " WHERE id = ?1")) &&
-        prepare(db, &db->delete_recipe, STR("DELETE FROM recipes WHERE id = ?1")) &&
-        prepare(db, &db->list_categories,
-                STR("SELECT json_group_array(json(category)) FROM ("
-                " SELECT " CATEGORY_JSON " AS category"
-                " FROM categories c ORDER BY c.name COLLATE NOCASE)")) &&
-        prepare(db, &db->get_category,
-                STR("SELECT " CATEGORY_JSON " FROM categories c WHERE c.id = ?1")) &&
-        prepare(db, &db->insert_category,
-                STR("INSERT INTO categories (name) VALUES (trim("
-                TEXT_FIELD("1", "name", "NULL") "))"
-                " RETURNING id")) &&
-        prepare(db, &db->update_category,
-                STR("UPDATE categories SET name = trim(" TEXT_FIELD("2", "name", "NULL") ")"
-                " WHERE id = ?1")) &&
-        prepare(db, &db->delete_category, STR("DELETE FROM categories WHERE id = ?1")) &&
-        prepare(db, &db->list_images,
-                STR("SELECT json_group_array(json(image)) FROM ("
-                " SELECT json_object('id', i.id, 'url', " IMAGE_URL ","
-                " 'original_name', i.original_name, 'size', i.size,"
-                " 'created_at', i.created_at, 'used', " IMAGE_USE_COUNT ","
-                " 'recipes', json(" IMAGE_RECIPES ")) AS image"
-                " FROM images i ORDER BY i.id DESC)")) &&
-        prepare(db, &db->find_image,
-                STR("SELECT i.extension, " IMAGE_USE_COUNT " FROM images i WHERE i.id = ?1")) &&
-        prepare(db, &db->insert_image,
-                STR("INSERT INTO images (extension, original_name, size) VALUES (?1, ?2, ?3)"
-                " RETURNING id")) &&
-        prepare(db, &db->delete_image, STR("DELETE FROM images WHERE id = ?1")) &&
-        prepare(db, &db->parse_login,
-                STR("SELECT json_extract(?1, '$.username'), json_extract(?1, '$.password')")) &&
-        prepare(db, &db->upsert_login_client,
-                STR("INSERT INTO login_clients (ip, country, first_seen, last_seen)"
-                " VALUES (?1, nullif(?2, ''), ?3, ?3)"
-                " ON CONFLICT (ip) DO UPDATE SET last_seen = excluded.last_seen,"
-                " country = coalesce(excluded.country, login_clients.country)"
-                " RETURNING id")) &&
-        prepare(db, &db->insert_login_attempt,
-                STR("INSERT INTO login_attempts (client_id, at, username, user_agent, succeeded)"
-                " VALUES (?1, ?2, ?3, ?4, ?5)")) &&
-        prepare(db, &db->prune_login_attempts, STR("DELETE FROM login_attempts WHERE at < ?1")) &&
-        prepare(db, &db->prune_login_clients,
-                STR("DELETE FROM login_clients WHERE last_seen < ?1")) &&
-        prepare(db, &db->login_report, STR(LOGIN_REPORT_SQL)) &&
-        prepare(db, &db->recent_login_failures,
-                STR("SELECT c.ip, count(*), max(a.at)"
-                " FROM login_attempts a JOIN login_clients c ON c.id = a.client_id"
-                " WHERE a.succeeded = 0 AND a.at >= ?1 AND a.at > c.cleared_at"
-                // By id, not time: a failure in the same second as a success may come after it.
-                " AND a.id > coalesce((SELECT max(s.id) FROM login_attempts s"
-                " WHERE s.client_id = c.id AND s.succeeded = 1), 0)"
-                " GROUP BY c.id")) &&
-        prepare(db, &db->clear_login_client,
-                STR("UPDATE login_clients SET cleared_at = ?2 WHERE id = ?1 RETURNING ip"));
+    bool const ok = prepare_recipe_statements(db) &&
+                    prepare_category_and_image_statements(db) &&
+                    prepare_login_statements(db);
     if (!ok) {
         db_close(db);
     }
     return ok;
 }
 
-void db_close(Db *db) {
+void db_close(DB *db) {
     sqlite3_finalize(db->is_json_object);
     sqlite3_finalize(db->list_recipes);
     sqlite3_finalize(db->get_recipe);
@@ -418,7 +437,7 @@ void db_close(Db *db) {
     db->conn = NULL;
 }
 
-static Db_Status status_from(int rc) {
+static DB_Status status_from(int rc) {
     switch (rc & 0xff) {
     case SQLITE_BUSY:
     case SQLITE_LOCKED:
@@ -441,11 +460,11 @@ static Db_Status status_from(int rc) {
  * For recipe writes, a slug another recipe has is a conflict. A category that
  * does not exist is invalid input, as is any other failed constraint.
  */
-static Db_Status recipe_status_from(int rc) {
+static DB_Status recipe_status_from(int rc) {
     return rc == SQLITE_CONSTRAINT_UNIQUE ? DB_CONFLICT : status_from(rc);
 }
 
-static Db_Status category_status_from(int rc) {
+static DB_Status category_status_from(int rc) {
     if ((rc & 0xff) == SQLITE_CONSTRAINT && rc != SQLITE_CONSTRAINT_CHECK &&
         rc != SQLITE_CONSTRAINT_NOTNULL) {
         return DB_CONFLICT;
@@ -458,13 +477,13 @@ static void finish(sqlite3_stmt *stmt) {
     sqlite3_clear_bindings(stmt);
 }
 
-static Db_Status check_json_object(Db *db, Str json) {
+static DB_Status check_json_object(DB *db, Str json) {
     if (json.len > MAX_JSON_SIZE || !sql_bind_str(db->is_json_object, 1, json)) {
         finish(db->is_json_object);
         return DB_INVALID;
     }
     int rc = sqlite3_step(db->is_json_object);
-    Db_Status status = DB_ERROR;
+    DB_Status status = DB_ERROR;
     if (rc == SQLITE_ROW) {
         status = sqlite3_column_int(db->is_json_object, 0) ? DB_OK : DB_INVALID;
     } else {
@@ -475,10 +494,10 @@ static Db_Status check_json_object(Db *db, Str json) {
 }
 
 // Appends the single text column of a one-row query.
-static Db_Status append_text_result(sqlite3_stmt *stmt, Str_Builder *out) {
+static DB_Status append_text_result(sqlite3_stmt *stmt, Str_Builder *out) {
     assert(out != NULL);
     int rc = sqlite3_step(stmt);
-    Db_Status status;
+    DB_Status status;
     if (rc == SQLITE_ROW) {
         if (str_builder_append(out, sql_column_str(stmt, 0))) {
             status = DB_OK;
@@ -494,16 +513,16 @@ static Db_Status append_text_result(sqlite3_stmt *stmt, Str_Builder *out) {
     return status;
 }
 
-static Db_Status get_json(sqlite3_stmt *stmt, int64_t id, Str_Builder *out) {
+static DB_Status get_json(sqlite3_stmt *stmt, int64_t id, Str_Builder *out) {
     assert(out != NULL);
     sqlite3_bind_int64(stmt, 1, id);
     return append_text_result(stmt, out);
 }
 
 // Runs an INSERT ... RETURNING id with the JSON body bound to ?1.
-static Db_Status insert_from_json(Db *db, sqlite3_stmt *stmt, Str json, int64_t *id,
-                                  Db_Status (*map_error)(int)) {
-    Db_Status status = check_json_object(db, json);
+static DB_Status insert_from_json(DB *db, sqlite3_stmt *stmt, Str json, int64_t *id,
+                                  DB_Status (*map_error)(int)) {
+    DB_Status status = check_json_object(db, json);
     if (status != DB_OK) {
         return status;
     }
@@ -519,9 +538,9 @@ static Db_Status insert_from_json(Db *db, sqlite3_stmt *stmt, Str json, int64_t 
 }
 
 // Runs an UPDATE or DELETE whose row id is bound to ?1; no change means not found.
-static Db_Status change_row(Db *db, sqlite3_stmt *stmt, Db_Status (*map_error)(int)) {
+static DB_Status change_row(DB *db, sqlite3_stmt *stmt, DB_Status (*map_error)(int)) {
     int rc = sqlite3_step(stmt);
-    Db_Status status;
+    DB_Status status;
     if (rc != SQLITE_DONE) {
         status = map_error(rc);
     } else if (sqlite3_changes(db->conn) == 0) {
@@ -533,9 +552,9 @@ static Db_Status change_row(Db *db, sqlite3_stmt *stmt, Db_Status (*map_error)(i
     return status;
 }
 
-static Db_Status update_from_json(Db *db, sqlite3_stmt *stmt, int64_t id, Str json,
-                                  Db_Status (*map_error)(int)) {
-    Db_Status status = check_json_object(db, json);
+static DB_Status update_from_json(DB *db, sqlite3_stmt *stmt, int64_t id, Str json,
+                                  DB_Status (*map_error)(int)) {
+    DB_Status status = check_json_object(db, json);
     if (status != DB_OK) {
         return status;
     }
@@ -544,22 +563,22 @@ static Db_Status update_from_json(Db *db, sqlite3_stmt *stmt, int64_t id, Str js
     return change_row(db, stmt, map_error);
 }
 
-static Db_Status delete_row(Db *db, sqlite3_stmt *stmt, int64_t id, Db_Status (*map_error)(int)) {
+static DB_Status delete_row(DB *db, sqlite3_stmt *stmt, int64_t id, DB_Status (*map_error)(int)) {
     sqlite3_bind_int64(stmt, 1, id);
     return change_row(db, stmt, map_error);
 }
 
-Db_Status db_list_recipes_json(Db *db, Str_Builder *out) {
+DB_Status db_list_recipes_json(DB *db, Str_Builder *out) {
     assert(out != NULL);
     return append_text_result(db->list_recipes, out);
 }
 
-Db_Status db_get_recipe_json(Db *db, int64_t id, Str_Builder *out) {
+DB_Status db_get_recipe_json(DB *db, int64_t id, Str_Builder *out) {
     assert(out != NULL);
     return get_json(db->get_recipe, id, out);
 }
 
-Db_Status db_get_recipe_by_slug_json(Db *db, Str slug, Str_Builder *out) {
+DB_Status db_get_recipe_by_slug_json(DB *db, Str slug, Str_Builder *out) {
     assert(out != NULL);
     if (!sql_bind_str(db->get_recipe_by_slug, 1, slug)) {
         finish(db->get_recipe_by_slug);
@@ -568,10 +587,10 @@ Db_Status db_get_recipe_by_slug_json(Db *db, Str slug, Str_Builder *out) {
     return append_text_result(db->get_recipe_by_slug, out);
 }
 
-Db_Status db_recipe_slug_exists(Db *db, Str slug, bool *exists) {
+DB_Status db_recipe_slug_exists(DB *db, Str slug, bool *exists) {
     assert(exists != NULL);
     sqlite3_stmt *stmt = db->find_recipe_slug;
-    Db_Status status = DB_OK;
+    DB_Status status = DB_OK;
     if (!sql_bind_str(stmt, 1, slug)) {
         status = DB_ERROR;
     } else {
@@ -586,48 +605,48 @@ Db_Status db_recipe_slug_exists(Db *db, Str slug, bool *exists) {
     return status;
 }
 
-Db_Status db_create_recipe(Db *db, Str json, int64_t *id) {
+DB_Status db_create_recipe(DB *db, Str json, int64_t *id) {
     assert(id != NULL);
     return insert_from_json(db, db->insert_recipe, json, id, recipe_status_from);
 }
 
-Db_Status db_update_recipe(Db *db, int64_t id, Str json) {
+DB_Status db_update_recipe(DB *db, int64_t id, Str json) {
     return update_from_json(db, db->update_recipe, id, json, recipe_status_from);
 }
 
-Db_Status db_delete_recipe(Db *db, int64_t id) {
+DB_Status db_delete_recipe(DB *db, int64_t id) {
     return delete_row(db, db->delete_recipe, id, status_from);
 }
 
-Db_Status db_list_categories_json(Db *db, Str_Builder *out) {
+DB_Status db_list_categories_json(DB *db, Str_Builder *out) {
     assert(out != NULL);
     return append_text_result(db->list_categories, out);
 }
 
-Db_Status db_get_category_json(Db *db, int64_t id, Str_Builder *out) {
+DB_Status db_get_category_json(DB *db, int64_t id, Str_Builder *out) {
     assert(out != NULL);
     return get_json(db->get_category, id, out);
 }
 
-Db_Status db_create_category(Db *db, Str json, int64_t *id) {
+DB_Status db_create_category(DB *db, Str json, int64_t *id) {
     assert(id != NULL);
     return insert_from_json(db, db->insert_category, json, id, category_status_from);
 }
 
-Db_Status db_update_category(Db *db, int64_t id, Str json) {
+DB_Status db_update_category(DB *db, int64_t id, Str json) {
     return update_from_json(db, db->update_category, id, json, category_status_from);
 }
 
-Db_Status db_delete_category(Db *db, int64_t id) {
+DB_Status db_delete_category(DB *db, int64_t id) {
     return delete_row(db, db->delete_category, id, category_status_from);
 }
 
-Db_Status db_list_images_json(Db *db, Str_Builder *out) {
+DB_Status db_list_images_json(DB *db, Str_Builder *out) {
     assert(out != NULL);
     return append_text_result(db->list_images, out);
 }
 
-Db_Status db_create_image(Db *db, Str extension, Str original_name, int64_t size, int64_t *id) {
+DB_Status db_create_image(DB *db, Str extension, Str original_name, int64_t size, int64_t *id) {
     assert(id != NULL);
     sqlite3_stmt *stmt = db->insert_image;
     if (!sql_bind_str(stmt, 1, extension) || !sql_bind_str(stmt, 2, original_name) ||
@@ -640,17 +659,17 @@ Db_Status db_create_image(Db *db, Str extension, Str original_name, int64_t size
         *id = sqlite3_column_int64(stmt, 0);
         rc = sqlite3_step(stmt);  // Runs the statement to completion.
     }
-    Db_Status status = rc == SQLITE_DONE ? DB_OK : status_from(rc);
+    DB_Status status = rc == SQLITE_DONE ? DB_OK : status_from(rc);
     finish(stmt);
     return status;
 }
 
-Db_Status db_delete_image(Db *db, int64_t id, Str_Builder *file_name) {
+DB_Status db_delete_image(DB *db, int64_t id, Str_Builder *file_name) {
     assert(file_name != NULL);
     sqlite3_stmt *find = db->find_image;
     sqlite3_bind_int64(find, 1, id);
     int rc = sqlite3_step(find);
-    Db_Status status = DB_OK;
+    DB_Status status = DB_OK;
     if (rc == SQLITE_DONE) {
         status = DB_NOT_FOUND;
     } else if (rc != SQLITE_ROW) {
@@ -669,7 +688,7 @@ Db_Status db_delete_image(Db *db, int64_t id, Str_Builder *file_name) {
     return db_forget_image(db, id);
 }
 
-Db_Status db_forget_image(Db *db, int64_t id) {
+DB_Status db_forget_image(DB *db, int64_t id) {
     return delete_row(db, db->delete_image, id, status_from);
 }
 
@@ -680,10 +699,10 @@ static bool append_text_column(sqlite3_stmt *stmt, int column, Str_Builder *out)
     return str_builder_append(out, sql_column_str(stmt, column));
 }
 
-Db_Status db_parse_login(Db *db, Str json, Str_Builder *username, Str_Builder *password) {
+DB_Status db_parse_login(DB *db, Str json, Str_Builder *username, Str_Builder *password) {
     assert(username != NULL);
     assert(password != NULL);
-    Db_Status status = check_json_object(db, json);
+    DB_Status status = check_json_object(db, json);
     if (status != DB_OK) {
         return status;
     }
@@ -708,7 +727,7 @@ static int run(sqlite3_stmt *stmt) {
     return rc;
 }
 
-static Db_Status record_login_steps(Db *db, Db_Login_Attempt const *attempt) {
+static DB_Status record_login_steps(DB *db, DB_Login_Attempt const *attempt) {
     sqlite3_stmt *client = db->upsert_login_client;
     if (!sql_bind_str(client, 1, attempt->ip) || !sql_bind_str(client, 2, attempt->country) ||
         sqlite3_bind_int64(client, 3, attempt->at) != SQLITE_OK) {
@@ -750,11 +769,11 @@ static Db_Status record_login_steps(Db *db, Db_Login_Attempt const *attempt) {
     return rc == SQLITE_DONE ? DB_OK : status_from(rc);
 }
 
-Db_Status db_record_login(Db *db, Db_Login_Attempt const *attempt) {
+DB_Status db_record_login(DB *db, DB_Login_Attempt const *attempt) {
     if (!sql_exec(db->conn, STR("BEGIN IMMEDIATE;"), STR("starting to record a login"))) {
         return DB_BUSY;
     }
-    Db_Status const status = record_login_steps(db, attempt);
+    DB_Status const status = record_login_steps(db, attempt);
     if (status == DB_OK && sql_exec(db->conn, STR("COMMIT;"), STR("recording a login"))) {
         return DB_OK;
     }
@@ -762,12 +781,12 @@ Db_Status db_record_login(Db *db, Db_Login_Attempt const *attempt) {
     return status == DB_OK ? DB_ERROR : status;
 }
 
-Db_Status db_login_report_json(Db *db, Str_Builder *out) {
+DB_Status db_login_report_json(DB *db, Str_Builder *out) {
     assert(out != NULL);
     return append_text_result(db->login_report, out);
 }
 
-Db_Status db_recent_login_failures(Db *db, int64_t since, Db_Failure_Callback each,
+DB_Status db_recent_login_failures(DB *db, int64_t since, DB_Failure_Callback each,
                                    void *context) {
     assert(each != NULL);
     sqlite3_stmt *stmt = db->recent_login_failures;
@@ -782,13 +801,13 @@ Db_Status db_recent_login_failures(Db *db, int64_t since, Db_Failure_Callback ea
     return rc == SQLITE_DONE ? DB_OK : status_from(rc);
 }
 
-Db_Status db_clear_login_client(Db *db, int64_t id, int64_t now, Str_Builder *ip) {
+DB_Status db_clear_login_client(DB *db, int64_t id, int64_t now, Str_Builder *ip) {
     assert(ip != NULL);
     sqlite3_stmt *stmt = db->clear_login_client;
     sqlite3_bind_int64(stmt, 1, id);
     sqlite3_bind_int64(stmt, 2, now);
     int rc = sqlite3_step(stmt);
-    Db_Status status;
+    DB_Status status;
     if (rc == SQLITE_ROW) {
         str_builder_append(ip, sql_column_str(stmt, 0));
         rc = sqlite3_step(stmt);  // Runs the statement to completion.
