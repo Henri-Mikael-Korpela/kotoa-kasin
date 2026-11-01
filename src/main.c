@@ -99,8 +99,8 @@ enum {
     IDLE_TIMEOUT_SEC = 15,
     /** Longest request path or file path, in bytes. */
     MAX_PATH_LEN = 1024,
-    /** Room in front of an in-place body for its head, in bytes (about 700 are used at most). */
-    HEAD_RESERVE = 1024,
+    /** Room in front of an in-place body for its head, in bytes (about 950 are used at most). */
+    HEAD_RESERVE = 1280,
     /** How long a session token is valid for, in seconds (8 hours). */
     TOKEN_LIFETIME_SEC = 8 * 60 * 60,
     /** Alignment of buffers, in bytes: one cache line. */
@@ -109,6 +109,8 @@ enum {
     MEMORY_PAGE_SIZE = 4096,
     /** Most blocked addresses shown in the login report. */
     MAX_REPORTED_BLOCKS = 500,
+    /** Room for the headers of a login response, in bytes: the session cookie is the most. */
+    SESSION_HEADERS_SIZE = 512,
 };
 
 static_assert(RESP_BUF_SIZE >= 4 * HEAD_RESERVE, "RESP_BUF_SIZE too small");
@@ -185,6 +187,12 @@ static Geoip GEOIP;  // Countries of addresses; empty when no country file is gi
  * Apps. Otherwise the header is ignored, since any client can send one.
  */
 static bool TRUST_PROXY = false;
+
+/**
+ * Whether the session cookie is sent only over HTTPS. Only the plain HTTP dev
+ * server turns this off (KASIN_INSECURE_COOKIE=1).
+ */
+static bool COOKIE_SECURE = true;
 
 /*
  * Large buffers. A few per worker are reserved at startup and lent to one
@@ -303,6 +311,9 @@ static Str mime_for(Str path) {
 static Str const JSON_TYPE = STR_INIT("application/json; charset=utf-8");
 static Str const NO_STORE = STR_INIT("Cache-Control: no-store\r\n");
 
+/** Name of the cookie that holds the session token. */
+static Str const SESSION_COOKIE = STR_INIT("kasin_session");
+
 // Headers of 405 responses: which methods the path does answer.
 static Str const ALLOW_GET_HEAD = STR_INIT(
     "Cache-Control: no-store\r\nAllow: GET, HEAD\r\n");
@@ -353,9 +364,10 @@ static Str status_reason(int status) {
 /*
  * Security headers, sent with every response.
  *
- * The session token lives in the browser's localStorage, so any script that
- * got injected into a page could read it. The Content-Security-Policy is the
- * safety net: the pages have no inline scripts or styles, and load scripts,
+ * The session token lives in an HttpOnly cookie, so no script can read it, but
+ * an injected script could still call the API as the logged-in admin. The
+ * Content-Security-Policy is the safety net: the pages have no inline scripts
+ * or styles, and load scripts,
  * styles, images and API calls only from this site (plus Google Fonts), so an
  * injected <script>, inline handler or style, or a request to another site
  * does not run. blob: images are the upload preview of browsers without
@@ -705,7 +717,8 @@ typedef struct {
     bool     chunked;
     bool     bad_content_length;
     uint64_t content_length;
-    Str      authorization;
+    Str      cookie;
+    Str      sec_fetch_site;  /**< Sec-Fetch-Site: how the browser relates the caller to us. */
     Str      file_name;  /**< X-File-Name: an upload's original name, URL-encoded. */
     Str      forwarded_for;  /**< X-Forwarded-For, trusted only with TRUST_PROXY. */
     Str      user_agent;
@@ -751,8 +764,10 @@ static void scan_headers(Str headers, Request_Headers *h) {
             }
         } else if (str_eq_nocase(name, STR("transfer-encoding"))) {
             h->chunked = true;  // Any transfer coding: the body length is unknown.
-        } else if (str_eq_nocase(name, STR("authorization"))) {
-            h->authorization = value;
+        } else if (str_eq_nocase(name, STR("cookie"))) {
+            h->cookie = value;
+        } else if (str_eq_nocase(name, STR("sec-fetch-site"))) {
+            h->sec_fetch_site = value;
         } else if (str_eq_nocase(name, STR("x-file-name"))) {
             h->file_name = value;
         } else if (str_eq_nocase(name, STR("x-forwarded-for"))) {
@@ -775,13 +790,45 @@ static Str jwt_key(void) {
     return str_make((char const *)JWT_KEY, sizeof JWT_KEY);
 }
 
+/**
+ * Finds a cookie in the value of a Cookie header.
+ *
+ * @return False when the header does not have the cookie.
+ */
+static bool find_cookie(Str cookies, Str wanted, Str *value) {
+    assert(value != NULL);
+    Str rest = cookies;
+    while (rest.len > 0) {
+        Str pair;
+        if (!str_split_once(rest, STR(";"), &pair, &rest)) {
+            pair = rest;
+            rest = str_make(rest.data + rest.len, 0);
+        }
+        Str name;
+        Str found;
+        if (str_split_once(str_trim(pair), STR("="), &name, &found) && str_eq(name, wanted)) {
+            *value = found;
+            return true;
+        }
+    }
+    return false;
+}
+
+/**
+ * Checks the session cookie. A request another site made is not trusted even with
+ * a valid cookie: SameSite=Strict already keeps browsers from sending it, and
+ * Sec-Fetch-Site covers any that do. Clients without the header are not browsers,
+ * or old ones, and pass this check.
+ */
 static bool authenticate_headers(Request_Headers const *h, Jwt_Claims *claims) {
-    Str auth = h->authorization;
-    Str scheme = STR("Bearer ");
-    if (auth.len <= scheme.len || !str_eq_nocase(str_slice(auth, 0, scheme.len), scheme)) {
+    if (str_eq(h->sec_fetch_site, STR("cross-site")) ||
+        str_eq(h->sec_fetch_site, STR("same-site"))) {
         return false;
     }
-    Str token = str_trim(str_slice(auth, scheme.len, auth.len));
+    Str token;
+    if (!find_cookie(h->cookie, SESSION_COOKIE, &token)) {
+        return false;
+    }
     return jwt_verify(token, jwt_key(), unix_now(), claims);
 }
 
@@ -790,8 +837,7 @@ static bool authenticate(Request const *r, Jwt_Claims *claims) {
 }
 
 static void respond_unauthorized(Conn *c) {
-    respond_json_error(c, 401, STR("login required"),
-                       STR("Cache-Control: no-store\r\nWWW-Authenticate: Bearer\r\n"));
+    respond_json_error(c, 401, STR("login required"), NO_STORE);
 }
 
 static void respond_id(Conn *c, int status, int64_t id) {
@@ -943,6 +989,22 @@ static void respond_login_refused(Conn *c, Login_Decision const *d) {
 }
 
 /**
+ * Ends a Set-Cookie line for the session cookie. HttpOnly keeps it from scripts,
+ * SameSite=Strict from requests other sites start, and Path from everything but
+ * the API.
+ */
+static void append_cookie_attributes(Str_Builder *headers, int64_t max_age_sec) {
+    assert(headers != NULL);
+    str_builder_append(headers, STR("; Path=/api; Max-Age="));
+    str_builder_append_u64(headers, (uint64_t)max_age_sec);
+    str_builder_append(headers, STR("; HttpOnly; SameSite=Strict"));
+    if (COOKIE_SECURE) {
+        str_builder_append(headers, STR("; Secure"));
+    }
+    str_builder_append(headers, STR("\r\n"));
+}
+
+/**
  * POST /api/login. An address that failed too often recently, or a burst of
  * attempts from everywhere, is refused at once (see login_guard.h). Every
  * password that is checked is recorded in the database and logged.
@@ -1006,25 +1068,53 @@ static void api_login(Worker *w, Conn *c, Request const *r) {
                                       "\"retry_after\":"));
         str_builder_append_u64(&body, (uint64_t)after.retry_after);
         str_builder_append(&body, STR("}"));
-        respond_json(c, 401, &body, false,
-                     STR("Cache-Control: no-store\r\nWWW-Authenticate: Bearer\r\n"));
+        respond_json(c, 401, &body, false, NO_STORE);
         return;
     }
     login_guard_succeeded(&LOGIN_GUARD, &r->client);
     log_login_checked(&client, attempt.username, true, &decision);
 
     int64_t expires_at = now + TOKEN_LIFETIME_SEC;
-    Str_Builder body;
-    body_begin(c, &body);
-    str_builder_append(&body, STR("{\"token\":\""));
-    if (!jwt_issue(&body, ADMIN_USERNAME, now, expires_at, jwt_key())) {
+    char headers_buf[SESSION_HEADERS_SIZE];
+    Str_Builder headers;
+    str_builder_init(&headers, headers_buf, sizeof headers_buf);
+    str_builder_append(&headers, STR("Cache-Control: no-store\r\nSet-Cookie: "));
+    str_builder_append(&headers, SESSION_COOKIE);
+    str_builder_append(&headers, STR("="));
+    if (!jwt_issue(&headers, ADMIN_USERNAME, now, expires_at, jwt_key())) {
         respond_json_error(c, 500, STR("cannot issue token"), NO_STORE);
         return;
     }
-    str_builder_append(&body, STR("\",\"expires_at\":"));
+    append_cookie_attributes(&headers, TOKEN_LIFETIME_SEC);
+    if (headers.overflow) {
+        respond_json_error(c, 500, STR("cannot issue token"), NO_STORE);
+        return;
+    }
+    Str_Builder body;
+    body_begin(c, &body);
+    str_builder_append(&body, STR("{\"expires_at\":"));
     str_builder_append_u64(&body, (uint64_t)expires_at);
     str_builder_append(&body, STR("}"));
-    respond_json(c, 200, &body, false, NO_STORE);
+    respond_json(c, 200, &body, false, str_builder_str(&headers));
+}
+
+/**
+ * POST /api/logout. Scripts cannot touch an HttpOnly cookie, so the server clears
+ * it. The token itself stays valid until it expires: sessions are not stored.
+ */
+static void api_logout(Conn *c) {
+    char headers_buf[SESSION_HEADERS_SIZE];
+    Str_Builder headers;
+    str_builder_init(&headers, headers_buf, sizeof headers_buf);
+    str_builder_append(&headers, STR("Cache-Control: no-store\r\nSet-Cookie: "));
+    str_builder_append(&headers, SESSION_COOKIE);
+    str_builder_append(&headers, STR("="));
+    append_cookie_attributes(&headers, 0);
+
+    Str_Builder body;
+    body_begin(c, &body);
+    str_builder_append(&body, STR("{}"));
+    respond_json(c, 200, &body, false, str_builder_str(&headers));
 }
 
 /**
@@ -1482,7 +1572,8 @@ static void api_get_recipe_by_slug(Worker *w, Conn *c, Request const *r, Str slu
 /**
  * Routes requests under /api/.
  *
- *   POST   /api/login             {username, password} -> {token, expires_at}
+ *   POST   /api/login             {username, password} -> {expires_at}, sets the session cookie
+ *   POST   /api/logout            -> {}, clears the session cookie
  *   GET    /api/session           (auth) -> {username, expires_at}
  *
  *   GET    /api/recipes           -> [{id, slug, name, image, excerpt, category_id, category}, ...]
@@ -1517,6 +1608,14 @@ static void handle_api(Worker *w, Conn *c, Request const *r) {
     if (str_eq(r->path, STR("/api/login"))) {
         if (str_eq(r->method, STR("POST"))) {
             api_login(w, c, r);
+        } else {
+            respond_method_not_allowed(c, ALLOW_POST);
+        }
+        return;
+    }
+    if (str_eq(r->path, STR("/api/logout"))) {
+        if (str_eq(r->method, STR("POST"))) {
+            api_logout(c);
         } else {
             respond_method_not_allowed(c, ALLOW_POST);
         }
@@ -1707,7 +1806,8 @@ static size_t handle_request(Worker *w, Conn *c, Str head, size_t head_len) {
         .chunked = false,
         .bad_content_length = false,
         .content_length = 0,
-        .authorization = STR(""),
+        .cookie = STR(""),
+        .sec_fetch_site = STR(""),
         .file_name = STR(""),
         .forwarded_for = STR(""),
         .user_agent = STR(""),
@@ -2052,7 +2152,8 @@ static void usage(Str argv0) {
             "environment:\n"
             "  KASIN_ADMIN_PASSWORD_HASH  the admin password hash made by kasin-passwd\n"
             "  KASIN_JWT_SECRET           signs sessions; random per start when unset\n"
-            "  KASIN_TRUST_PROXY=1        take the client address from X-Forwarded-For\n",
+            "  KASIN_TRUST_PROXY=1        take the client address from X-Forwarded-For\n"
+            "  KASIN_INSECURE_COOKIE=1    session cookie also over plain HTTP (development)\n",
             STR_ARG(argv0));
 }
 
@@ -2252,6 +2353,7 @@ static int configure_login(Settings const *settings) {
     }
 
     TRUST_PROXY = str_eq(str_from_cstr(getenv("KASIN_TRUST_PROXY")), STR("1"));
+    COOKIE_SECURE = !str_eq(str_from_cstr(getenv("KASIN_INSECURE_COOKIE")), STR("1"));
     login_guard_init(&LOGIN_GUARD, unix_now());
     char geoip_z[MAX_PATH_LEN];  // open() needs a NUL-terminated path.
     if (settings->geoip_path.len == 0) {

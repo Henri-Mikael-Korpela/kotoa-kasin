@@ -118,7 +118,6 @@ const KasinGallery = (function () {
             method: 'POST',
             headers: {
                 'Accept': 'application/json',
-                'Authorization': 'Bearer ' + (getToken() || ''),
                 'Content-Type': 'image/jpeg',
                 'X-File-Name': encodeURIComponent(name),
             },

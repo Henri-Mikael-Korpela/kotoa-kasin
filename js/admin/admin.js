@@ -1,38 +1,22 @@
-// Admin pages (hallinta). The session is a JWT kept in localStorage and sent
-// as "Authorization: Bearer <token>" on API calls that need it.
+// Admin pages (hallinta). The session is an HttpOnly cookie set by the server:
+// the browser sends it with API calls, and no script here can read it.
 
-const TOKEN_KEY = 'kotoaKasinToken';
 const DESCRIPTION_MAX_LENGTH = 50000;  // The limit in the recipes table.
 const LOGIN_PAGE = '/hallinta/kirjaudu';
 const LIST_PAGE = '/hallinta';
 const FINNISH_ORDER = new Intl.Collator('fi', { sensitivity: 'base' });
 
-function getToken() {
+// Sessions used to be kept in localStorage; removes what an older version left there.
+function removeOldToken() {
     try {
-        return localStorage.getItem(TOKEN_KEY);
-    } catch (e) {
-        return null;
-    }
-}
-
-function setToken(token) {
-    try {
-        localStorage.setItem(TOKEN_KEY, token);
-    } catch (e) {
-        // Private mode without storage: the session simply ends with the page.
-    }
-}
-
-function clearToken() {
-    try {
-        localStorage.removeItem(TOKEN_KEY);
+        localStorage.removeItem('kotoaKasinToken');
     } catch (e) {
         // Nothing stored.
     }
 }
+removeOldToken();
 
 function goToLogin() {
-    clearToken();
     window.location.replace(LOGIN_PAGE);
 }
 
@@ -82,10 +66,6 @@ async function apiFetch(path, options) {
 // Calls the JSON API, signed in when there is a session.
 async function api(method, path, body) {
     const headers = { 'Accept': 'application/json' };
-    const token = getToken();
-    if (token) {
-        headers['Authorization'] = 'Bearer ' + token;
-    }
     const options = { method, headers };
     if (body !== undefined) {
         headers['Content-Type'] = 'application/json';
@@ -96,10 +76,6 @@ async function api(method, path, body) {
 
 // Resolves with the session, or sends the user to the login page.
 async function requireSession() {
-    if (!getToken()) {
-        goToLogin();
-        await new Promise(function () {});  // Never resolves: the page is on its way elsewhere.
-    }
     const session = await api('GET', '/api/session');
     const userEl = document.getElementById('adminUser');
     if (userEl) {
@@ -110,9 +86,18 @@ async function requireSession() {
 
 function setupLogout() {
     const button = document.getElementById('logoutButton');
-    if (button) {
-        button.addEventListener('click', goToLogin);
+    if (!button) {
+        return;
     }
+    button.addEventListener('click', async function () {
+        try {
+            await api('POST', '/api/logout');
+        } catch (error) {
+            window.alert('Uloskirjautuminen ei onnistunut. Yritä uudelleen.');
+            return;
+        }
+        goToLogin();
+    });
 }
 
 function messageFor(error, fallback) {
@@ -226,16 +211,16 @@ function initLoginPage() {
 
     // Already logged in: skip the form.
     async function skipIfLoggedIn() {
-        if (!getToken()) {
-            return;
-        }
+        // Not api(): its answer to a 401 is to come to this page, over and over.
+        let response;
         try {
-            await api('GET', '/api/session');
+            response = await fetch('/api/session', { headers: { 'Accept': 'application/json' } });
         } catch (error) {
-            clearToken();
             return;
         }
-        window.location.replace(LIST_PAGE);
+        if (response.ok) {
+            window.location.replace(LIST_PAGE);
+        }
     }
     skipIfLoggedIn();
 
@@ -244,9 +229,8 @@ function initLoginPage() {
         errorEl.textContent = '';
         button.disabled = true;
 
-        let data;
         try {
-            data = await api('POST', '/api/login', {
+            await api('POST', '/api/login', {
                 username: form.username.value.trim(),
                 password: form.password.value,
             });
@@ -260,7 +244,6 @@ function initLoginPage() {
             form.password.select();
             return;
         }
-        setToken(data.token);
         window.location.assign(LIST_PAGE);
     });
 }

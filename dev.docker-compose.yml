@@ -24,6 +24,8 @@ services:
     environment:
       # Read from .env by Compose; empty when there is none.
       KASIN_ADMIN_PASSWORD_HASH: ${KASIN_ADMIN_PASSWORD_HASH:-}
+      # This server is plain HTTP, where a Secure cookie may not be kept.
+      KASIN_INSECURE_COOKIE: "1"
     working_dir: /app
     # Countries of login attempts: DB-IP's data is downloaded once into the
     # build-cache volume and again when over a month old. Without a network

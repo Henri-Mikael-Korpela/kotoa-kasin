@@ -2,12 +2,13 @@
 
 # API
 
-Reading is public; changes need a login token (`Authorization: Bearer <token>`).
+Reading is public; changes need a login: the session cookie that `POST /api/login` sets, which browsers then send by themselves. See [Session cookie](security-headers.md#session-cookie).
 
 | Endpoint | Purpose |
 |---|---|
-| `POST /api/login` | `{username, password}` returns `{token, expires_at}`. A wrong password: 401 with `retry_after` (seconds before the next attempt). Refused by the [login protection](login-protection.md): 429 with `Retry-After` and `{error, reason: "delayed", "banned" or "busy", retry_after}` |
-| `GET /api/session` | Checks the token (login required) |
+| `POST /api/login` | `{username, password}` sets the session cookie and returns `{expires_at}`. A wrong password: 401 with `retry_after` (seconds before the next attempt). Refused by the [login protection](login-protection.md): 429 with `Retry-After` and `{error, reason: "delayed", "banned" or "busy", retry_after}` |
+| `POST /api/logout` | Clears the session cookie and returns `{}` |
+| `GET /api/session` | Checks the session and returns `{username, expires_at}` (login required) |
 | `GET`, `POST /api/recipes` | List (with `excerpt` instead of `description`), create (`slug`, `name`, `image`, `description`, `category_id`; 409 if another recipe has the slug) |
 | `GET`, `PUT`, `DELETE /api/recipes/{id}` | Read, update (409 if another recipe has the slug), delete |
 | `GET /api/recipes/slug/{slug}` | Read a recipe by its slug |

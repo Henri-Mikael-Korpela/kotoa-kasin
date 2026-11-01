@@ -12,7 +12,7 @@ kasin-httpd [-p port] [-t threads] [-r docroot] [-d database] [-m migrations]
 
 Environment: `KASIN_ADMIN_PASSWORD_HASH` (see [Admin password](admin-password.md)),
 `KASIN_JWT_SECRET` (signs sessions; random at each start when unset, which
-logs everyone out on restart) and `KASIN_TRUST_PROXY=1` (take the client
+logs everyone out on restart), `KASIN_INSECURE_COOKIE=1` (send the session cookie over plain HTTP too; for the dev server only) and `KASIN_TRUST_PROXY=1` (take the client
 address from `X-Forwarded-For`; only behind a proxy that sets it).
 
 `-u` names the directory uploaded images are stored in (default `uploads`,
