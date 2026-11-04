@@ -265,6 +265,15 @@ All in the resource group from `deploy/config.env` (default `kotoa-kasin`):
   `az containerapp update --name kotoa-kasin --resource-group kotoa-kasin --min-replicas 1`
   (run it inside the tooling container; this costs an always-on replica).
 
+## Custom domain and `www`
+
+The site's main address is `kotoakasin.fi`. The server answers any request whose
+`Host` starts with `www.` with a `301` to the same path and query on the address
+without `www.` (always `https`), so search engines see only one address. For
+visitors to get that far, `www.kotoakasin.fi` must also be added to the Container
+App as a custom domain, with its own certificate (DNS record `CNAME www` pointing
+to the app's address).
+
 ## Useful commands
 
 Run these inside the tooling container

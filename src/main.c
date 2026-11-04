@@ -345,6 +345,8 @@ static Str status_reason(int status) {
         return STR("OK");
     case 201:
         return STR("Created");
+    case 301:
+        return STR("Moved Permanently");
     case 400:
         return STR("Bad Request");
     case 401:
@@ -856,11 +858,13 @@ typedef struct {
     Str      sec_fetch_site;  /**< Sec-Fetch-Site: how the browser relates the caller to us. */
     Str      file_name;  /**< X-File-Name: an upload's original name, URL-encoded. */
     Str      forwarded_for;  /**< X-Forwarded-For, trusted only with TRUST_PROXY. */
+    Str      host;  /**< Host: the address the visitor used. */
     Str      user_agent;
 } Request_Headers;
 
 typedef struct {
     Str                    method;
+    Str                    target;  /**< The request target as sent, with its query string. */
     Str                    path;  /**< Target without query string or fragment. */
     Str                    body;
     bool                   head_only;
@@ -907,6 +911,8 @@ static void scan_headers(Str headers, Request_Headers *h) {
             h->file_name = value;
         } else if (str_eq_nocase(name, STR("x-forwarded-for"))) {
             h->forwarded_for = value;
+        } else if (str_eq_nocase(name, STR("host"))) {
+            h->host = value;
         } else if (str_eq_nocase(name, STR("user-agent"))) {
             h->user_agent = value;
         }
@@ -1850,6 +1856,54 @@ static size_t take_large_body(Worker *w, Conn *c, Request_Headers const *h, size
 }
 
 /**
+ * Whether every byte of s is safe to copy into a header line: printable ASCII only.
+ */
+static bool is_header_safe(Str s) {
+    for (size_t i = 0; i < s.len; i++) {
+        unsigned char const ch = (unsigned char)s.data[i];
+        if (ch <= ' ' || ch >= 127) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/**
+ * Sends visitors who came by www.<domain> to <domain>, with the same path and query.
+ * The site then has one address, so search engines do not see duplicate content.
+ * The redirect is to https: production is HTTPS only (see SECURITY_HEADERS).
+ *
+ * @return True when the request was answered with a redirect.
+ */
+static bool redirect_www(Conn *c, Request const *r) {
+    Str const prefix = STR("www.");
+    Str const host = r->headers->host;
+    if (host.len <= prefix.len || !str_starts_with(host, prefix) || !is_header_safe(host) ||
+        !is_header_safe(r->target)) {
+        return false;
+    }
+    char location_buf[512];
+    Str_Builder location;
+    str_builder_init(&location, location_buf, sizeof location_buf);
+    str_builder_append(&location, STR("Location: https://"));
+    str_builder_append(&location, str_slice(host, prefix.len, host.len));
+    str_builder_append(&location, r->target);
+    str_builder_append(&location, STR("\r\n"));
+    if (location.overflow) {
+        return false;
+    }
+    char extra_buf[640];
+    Str_Builder extra;
+    str_builder_init(&extra, extra_buf, sizeof extra_buf);
+    str_builder_append(&extra, str_builder_str(&location));
+    str_builder_append(&extra, STR("Cache-Control: public, max-age=3600\r\n"));
+    Reply const reply = make_reply(301, STR("text/plain; charset=utf-8"), r->head_only,
+                                   str_builder_str(&extra));
+    respond_simple(c, &reply, STR("301 Moved Permanently\n"));
+    return true;
+}
+
+/**
  * Answers a whole request, by its path.
  */
 static void route_request(Worker *w, Conn *c, Request const *r) {
@@ -1865,6 +1919,10 @@ static void route_request(Worker *w, Conn *c, Request const *r) {
         str_find_any(r->path, STR("%\\\0")) != STR_NPOS || str_contains(r->path, STR("..")) ||
         str_contains(r->path, STR("//"))) {
         respond_error(c, 400, r->head_only);
+        return;
+    }
+
+    if (redirect_www(c, r)) {
         return;
     }
 
@@ -1941,6 +1999,7 @@ static Request_Headers request_headers_empty(void) {
         .sec_fetch_site = STR(""),
         .file_name = STR(""),
         .forwarded_for = STR(""),
+        .host = STR(""),
         .user_agent = STR(""),
     };
 }
@@ -1998,6 +2057,7 @@ static size_t handle_request(Worker *w, Conn *c, Str head, size_t head_len) {
 
     Request r = {
         .method = method,
+        .target = target,
         .path = path_of_target(target),
         .body = str_slice(buffered, head_len, request_len),
         .head_only = str_eq(method, STR("HEAD")),
