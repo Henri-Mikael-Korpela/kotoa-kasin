@@ -13,3 +13,6 @@ deploy/secrets.env
 # deploy/config.env. They identify your Azure account, so they stay out of
 # version control.
 deploy/config.local.env
+
+# Production database backups made by deploy/bin/backup-db-prod.
+backups/

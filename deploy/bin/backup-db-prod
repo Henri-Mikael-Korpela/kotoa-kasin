@@ -1,0 +1,146 @@
+#!/usr/bin/env bash
+#
+# Stores a backup of the production SQLite database in <project root>/backups.
+#
+# Run inside the deployment tooling container:
+#   docker exec -it kotoa-kasin-deploy backup-db-prod
+#
+# The database is the file kotoa.db on the Azure Files share. Production runs
+# SQLite with journal_mode = DELETE (no -wal file), so the one file is the whole
+# database. The file is checked to be unchanged while it was downloaded, so a
+# write in the middle cannot leave a torn copy.
+#
+# Settings: deploy/config.env, overridden by deploy/config.local.env.
+
+set -euo pipefail
+
+REPO_DIR=${REPO_DIR:-/workspace}
+CONFIG_FILE="$REPO_DIR/deploy/config.env"
+LOCAL_CONFIG_FILE="$REPO_DIR/deploy/config.local.env"
+BACKUP_DIR="$REPO_DIR/backups"
+DB_FILE_NAME=kotoa.db  # Path of the database on the share (see the Dockerfile's -d option).
+MAX_ATTEMPTS=3         # Downloads tried before giving up on a database that keeps changing.
+
+usage() {
+    cat <<'EOF'
+usage: backup-db-prod [--help]
+
+Downloads the production database from Azure Files and stores it as
+backups/kotoa-<UTC date>-<UTC time>.db in the project root.
+Signs in to Azure first if needed (device code: open the shown link on any device).
+Settings are read from deploy/config.env, then from deploy/config.local.env (not
+committed) if it exists, so a value in the local file wins.
+EOF
+}
+
+case "${1:-}" in
+    "")
+        ;;
+    -h | --help)
+        usage
+        exit 0
+        ;;
+    *)
+        usage >&2
+        exit 64
+        ;;
+esac
+
+step() {
+    printf '\n==> %s\n' "$*"
+}
+
+# shellcheck source-path=SCRIPTDIR source=../config.env
+. "$CONFIG_FILE"
+if [ -f "$LOCAL_CONFIG_FILE" ]; then
+    # shellcheck source=/dev/null
+    . "$LOCAL_CONFIG_FILE"
+fi
+
+RG=$AZURE_RESOURCE_GROUP
+SHARE=$AZURE_FILE_SHARE
+
+if ! mkdir -p "$BACKUP_DIR" 2> /dev/null || ! [ -w "$BACKUP_DIR" ]; then
+    echo "error: $BACKUP_DIR is not writable. The deploy service must mount ./backups" >&2
+    echo "read-write (see dev.docker-compose.yml); recreate it with:" >&2
+    echo "  docker compose -f dev.docker-compose.yml up -d deploy" >&2
+    exit 1
+fi
+
+# Sign in, as `deploy` does: AZURE_TENANT picks the directory with the subscription.
+
+login() {
+    local args=(--use-device-code --output none)
+    if [ -n "${AZURE_TENANT:-}" ]; then
+        args+=(--tenant "$AZURE_TENANT")
+    fi
+    az login "${args[@]}"
+}
+
+select_subscription() {
+    [ -z "${AZURE_SUBSCRIPTION:-}" ] || az account set --subscription "$AZURE_SUBSCRIPTION" 2> /dev/null
+}
+
+if ! az account show --output none 2> /dev/null; then
+    step "Signing in to Azure"
+    login
+fi
+if ! select_subscription; then
+    if [ -n "${AZURE_TENANT:-}" ]; then
+        step "Subscription not found in the current sign-in; signing in to $AZURE_TENANT"
+        login
+    fi
+    if ! select_subscription; then
+        echo "error: subscription '$AZURE_SUBSCRIPTION' is not visible to the current sign-in." >&2
+        exit 1
+    fi
+fi
+SUBSCRIPTION_ID=$(az account show --query id --output tsv)
+
+SUFFIX=$(printf '%s' "$SUBSCRIPTION_ID" | tr -d '-' | cut -c1-8)
+STORAGE_ACCOUNT=${AZURE_STORAGE_ACCOUNT:-kotoakasin$SUFFIX}
+
+step "Downloading $DB_FILE_NAME from share $SHARE in $STORAGE_ACCOUNT"
+STORAGE_KEY=$(az storage account keys list --account-name "$STORAGE_ACCOUNT" \
+    --resource-group "$RG" --query '[0].value' --output tsv)
+
+# The key goes to az through the environment, not the command line.
+export AZURE_STORAGE_KEY="$STORAGE_KEY"
+
+# Identifies the file's content version: changes whenever the server writes to it.
+file_etag() {
+    az storage file show --account-name "$STORAGE_ACCOUNT" --share-name "$SHARE" \
+        --path "$DB_FILE_NAME" --query properties.etag --output tsv
+}
+
+STAMP=$(date -u +%Y%m%d-%H%M%S)
+TARGET="$BACKUP_DIR/kotoa-$STAMP.db"
+PARTIAL="$TARGET.partial"
+trap 'rm -f "$PARTIAL"' EXIT
+
+attempt=1
+while true; do
+    before=$(file_etag)
+    az storage file download --account-name "$STORAGE_ACCOUNT" --share-name "$SHARE" \
+        --path "$DB_FILE_NAME" --dest "$PARTIAL" --no-progress --output none
+    after=$(file_etag)
+    if [ "$before" = "$after" ]; then
+        break
+    fi
+    if [ "$attempt" -ge "$MAX_ATTEMPTS" ]; then
+        echo "error: the database kept changing during $MAX_ATTEMPTS downloads; try again later." >&2
+        exit 1
+    fi
+    attempt=$((attempt + 1))
+    echo "The database changed during the download; retrying ($attempt/$MAX_ATTEMPTS)."
+done
+
+# An SQLite file starts with this 16-byte header; a short or wrong file is not a database.
+if [ "$(head -c 15 "$PARTIAL")" != "SQLite format 3" ]; then
+    echo "error: the downloaded file is not an SQLite database." >&2
+    exit 1
+fi
+
+mv "$PARTIAL" "$TARGET"
+step "Backup stored"
+echo "$TARGET ($(wc -c < "$TARGET") bytes)"

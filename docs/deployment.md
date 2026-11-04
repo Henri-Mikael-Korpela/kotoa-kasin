@@ -283,6 +283,18 @@ az containerapp show --name kotoa-kasin --resource-group kotoa-kasin \
 az group delete --name kotoa-kasin
 ```
 
+## Back up the live database
+
+```sh
+docker exec -it kotoa-kasin-deploy backup-db-prod
+```
+
+This downloads the database from the Azure Files share and stores it as
+`backups/kotoa-<UTC date>-<UTC time>.db` in the project root (not in version
+control). It signs in to Azure first if needed. The tooling container mounts
+`backups/` read-write, so recreate the container once after pulling this change:
+`docker compose -f dev.docker-compose.yml up -d deploy`.
+
 ## Cost
 
 The container registry (Basic) is the only fixed cost, about 5 €/month. Storage

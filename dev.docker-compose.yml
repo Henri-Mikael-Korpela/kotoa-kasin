@@ -50,11 +50,13 @@ services:
     init: true
     volumes:
       - .:/workspace:ro
+      - ./backups:/workspace/backups  # the only writable part: backup-db-prod stores backups here
       - azure-login:/root/.azure  # keeps the `az login` between restarts
     working_dir: /workspace
     command: >
       sh -c "printf '#!/bin/sh\nexec bash /workspace/deploy/bin/deploy \"$$@\"\n' > /usr/local/bin/deploy &&
-             chmod +x /usr/local/bin/deploy &&
+             printf '#!/bin/sh\nexec bash /workspace/deploy/bin/backup-db-prod \"$$@\"\n' > /usr/local/bin/backup-db-prod &&
+             chmod +x /usr/local/bin/deploy /usr/local/bin/backup-db-prod &&
              exec sleep infinity"
 
 volumes:
