@@ -155,7 +155,7 @@ function createRecipeCard(recipe) {
     if (recipe.image) {
         const img = document.createElement('img');
         img.src = recipe.image;
-        img.alt = recipe.name;
+        img.alt = '';  // Decorative: the title link beside it names the recipe.
         img.loading = 'lazy';
         img.addEventListener('error', function () {
             img.remove();
@@ -165,9 +165,9 @@ function createRecipeCard(recipe) {
 
     const info = document.createElement('div');
     info.className = 'recipe-info';
-    const tag = document.createElement('a');
+    // Not a link: the same category name on many cards would repeat one anchor text.
+    const tag = document.createElement('span');
     tag.className = 'recipe-tag';
-    tag.href = categoryUrl(recipe.category);
     tag.textContent = recipe.category;
     const title = document.createElement('h3');
     const titleLink = document.createElement('a');
@@ -232,7 +232,8 @@ function showRecipe(recipe, page, status) {
     document.title = recipe.name + ' — Kotoa käsin';
     const tag = document.getElementById('recipeCategory');
     tag.href = categoryUrl(recipe.category);
-    tag.textContent = recipe.category;
+    // Not the bare category name: the menu's link to it has that text.
+    tag.textContent = 'Lisää kategoriasta ' + recipe.category;
     document.getElementById('recipeName').textContent = recipe.name;
 
     const cover = document.getElementById('recipeCover');
