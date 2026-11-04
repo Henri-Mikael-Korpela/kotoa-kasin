@@ -51,6 +51,7 @@
 #include "arena.h"
 #include "db.h"
 #include "geoip.h"
+#include "gzip.h"
 #include "ip.h"
 #include "jwt.h"
 #include "login_guard.h"
@@ -739,9 +740,10 @@ static bool make_nonce(Str_Builder *nonce) {
 /**
  * Sends a public page with a new nonce in its scripts and its policy. Takes
  * ownership of fd. The page must not be reused, as it is only good with its own
- * response's nonce; browsers ask for it again each time.
+ * response's nonce; browsers ask for it again each time. The page is sent gzipped
+ * when the browser accepts it and it gets smaller.
  */
-static void send_public_page(Conn *c, int status, Str mime, bool head_only, int fd,
+static void send_public_page(Conn *c, int status, Str mime, bool head_only, bool gzip, int fd,
                              struct stat const *st) {
     char page_buf[MAX_PUBLIC_PAGE_SIZE];
     bool const fits = S_ISREG(st->st_mode) && st->st_size <= (off_t)sizeof page_buf;
@@ -770,7 +772,19 @@ static void send_public_page(Conn *c, int status, Str mime, bool head_only, int 
     Str_Builder body;
     body_begin(c, &body);
     append_page_with_nonce(&body, str_make(page_buf, (size_t)got), str_builder_str(&nonce));
-    Reply reply = make_reply(status, mime, head_only, STR("Cache-Control: no-cache\r\n"));
+    Str extra_headers = STR("Cache-Control: no-cache\r\nVary: Accept-Encoding\r\n");
+    if (gzip && !body.overflow) {
+        // The page was copied into the body, so its buffer can take the compressed form.
+        size_t const packed_len = gzip_compress(str_builder_str(&body), (uint8_t *)page_buf,
+                                                sizeof page_buf);
+        if (packed_len > 0 && packed_len < body.len) {
+            memcpy(body.data, page_buf, packed_len);
+            body.len = packed_len;
+            extra_headers = STR("Cache-Control: no-cache\r\nVary: Accept-Encoding\r\n"
+                                "Content-Encoding: gzip\r\n");
+        }
+    }
+    Reply reply = make_reply(status, mime, head_only, extra_headers);
     reply.csp = str_builder_str(&csp);
     respond_in_place(c, &reply, &body);
 }
@@ -781,7 +795,8 @@ static void send_public_page(Conn *c, int status, Str mime, bool head_only, int 
  * Clean URLs are supported: a directory serves its index.html, and a missing
  * path without an extension falls back to the same path plus ".html".
  */
-static void serve_file(Conn *c, int status, Str rel_path, bool head_only, bool is_root) {
+static void serve_file(Conn *c, int status, Str rel_path, bool head_only, bool is_root,
+                       bool gzip) {
     char path_buf[MAX_PATH_LEN];
     Str_Builder path;
     str_builder_init(&path, path_buf, sizeof path_buf);
@@ -813,7 +828,7 @@ static void serve_file(Conn *c, int status, Str rel_path, bool head_only, bool i
     }
     Str const mime = mime_for(str_builder_str(&path));
     if (is_public_page(str_builder_str(&path), mime)) {
-        send_public_page(c, status, mime, head_only, fd, &st);
+        send_public_page(c, status, mime, head_only, gzip, fd, &st);
         return;
     }
     Reply const reply = make_reply(status, mime, head_only, STR(""));
@@ -859,6 +874,7 @@ typedef struct {
     Str      file_name;  /**< X-File-Name: an upload's original name, URL-encoded. */
     Str      forwarded_for;  /**< X-Forwarded-For, trusted only with TRUST_PROXY. */
     Str      host;  /**< Host: the address the visitor used. */
+    bool     accepts_gzip;  /**< Accept-Encoding lists gzip. */
     Str      user_agent;
 } Request_Headers;
 
@@ -913,6 +929,8 @@ static void scan_headers(Str headers, Request_Headers *h) {
             h->forwarded_for = value;
         } else if (str_eq_nocase(name, STR("host"))) {
             h->host = value;
+        } else if (str_eq_nocase(name, STR("accept-encoding"))) {
+            h->accepts_gzip = str_contains_nocase(value, STR("gzip"));
         } else if (str_eq_nocase(name, STR("user-agent"))) {
             h->user_agent = value;
         }
@@ -1949,7 +1967,8 @@ static void route_request(Worker *w, Conn *c, Request const *r) {
             db_recipe_slug_exists(&w->db, slug, &exists) != DB_OK) {
             exists = true;  // The page reports any database trouble itself.
         }
-        serve_file(c, exists ? 200 : 404, STR("resepti.html"), r->head_only, false);
+        serve_file(c, exists ? 200 : 404, STR("resepti.html"), r->head_only, false,
+                   r->headers->accepts_gzip);
         return;
     }
 
@@ -1974,7 +1993,8 @@ static void route_request(Worker *w, Conn *c, Request const *r) {
         str_builder_append(&path, STR("index.html"));
     }
 
-    serve_file(c, 200, str_builder_str(&path), r->head_only, rel.len == 0);
+    serve_file(c, 200, str_builder_str(&path), r->head_only, rel.len == 0,
+               r->headers->accepts_gzip);
 }
 
 /**
@@ -2000,6 +2020,7 @@ static Request_Headers request_headers_empty(void) {
         .file_name = STR(""),
         .forwarded_for = STR(""),
         .host = STR(""),
+        .accepts_gzip = false,
         .user_agent = STR(""),
     };
 }

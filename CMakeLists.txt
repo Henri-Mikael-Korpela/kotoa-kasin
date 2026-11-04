@@ -35,6 +35,7 @@ add_executable(kasin-httpd
   src/buddy.c
   src/db.c
   src/geoip.c
+  src/gzip.c
   src/ip.c
   src/jwt.c
   src/login_guard.c
@@ -126,3 +127,10 @@ add_executable(geoip-test
   src/str.c)
 target_compile_options(geoip-test PRIVATE ${KASIN_WARNINGS})
 add_test(NAME geoip COMMAND geoip-test)
+
+add_executable(gzip-test
+  tests/gzip_test.c
+  src/gzip.c
+  src/str.c)
+target_compile_options(gzip-test PRIVATE ${KASIN_WARNINGS})
+add_test(NAME gzip COMMAND gzip-test)
