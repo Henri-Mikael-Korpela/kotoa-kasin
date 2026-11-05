@@ -3,6 +3,8 @@
 # Re-run `docker compose -f dev.docker-compose.yml restart` to rebuild C code after edits.
 # JavaScript in js/ and CSS in css/ need no restart: watchers rebuild the bundles in
 # public/js and public/css on every save (see the container log); reload the page.
+# HTML templates in templates/ need no restart either: a watcher generates the pages in
+# public on every save, so reload the page.
 # The recipe database lives in the db-data volume and survives restarts.
 # The admin password: put the line printed by
 #   docker compose -f dev.docker-compose.yml exec httpd /build/kasin-passwd
@@ -37,7 +39,8 @@ services:
                { sh /app/scripts/fetch-geoip /build/geoip.csv &&
                  /build/kasin-geoip /build/geoip.csv /build/geoip.bin; rm -f /build/geoip.csv; } ||
                echo 'warning: no country data for login attempts'; } &&
-             { /build/kasin-jsbundle -w -o /app/public/js /app/js/bundles.txt &
+             { /build/kasin-htmlgen -w -o /app/public /app/templates &
+               /build/kasin-jsbundle -w -o /app/public/js /app/js/bundles.txt &
                /build/kasin-cssbundle -w -o /app/public/css /app/css/bundles.txt &
                exec /build/kasin-httpd -p 8080 -r /app/public -d /data/kotoa.db -m /app/migrations -u /data/uploads -g /build/geoip.bin; }"
 

@@ -1,0 +1,23 @@
+{{default bundle "site"}}
+<!DOCTYPE html>
+<html lang="fi">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+{{if robots}}
+  <meta name="robots" content="{{robots}}">
+{{end}}
+  <title>{{title}}</title>
+{{if description}}
+  <meta name="description" content="{{description}}">
+{{end}}
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link
+    href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=Work+Sans:wght@300;400;500;600&display=swap"
+    rel="stylesheet">
+  <link rel="icon" href="/assets/favicon.ico" sizes="any">
+  <link rel="apple-touch-icon" href="/assets/apple-touch-icon.png">
+  <link rel="stylesheet" href="/css/{{bundle}}.css">
+</head>

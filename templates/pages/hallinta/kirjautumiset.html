@@ -1,32 +1,11 @@
-<!DOCTYPE html>
-<html lang="fi">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="robots" content="noindex">
-  <title>Kirjautumiset &mdash; Kotoa käsin</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=Work+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-  <link rel="icon" href="/assets/favicon.ico" sizes="any">
-  <link rel="apple-touch-icon" href="/assets/apple-touch-icon.png">
-  <link rel="stylesheet" href="/css/admin.css">
-</head>
+{{set title "Kirjautumiset &mdash; Kotoa käsin"}}
+{{set robots "noindex"}}
+{{set bundle "admin"}}
+{{set page "logins"}}
+{{include "head.html"}}
 <body data-page="logins">
 
-  <header class="site-header admin-header">
-    <div class="nav-container">
-      <a href="/hallinta" class="logo">Kotoa käsin<span class="logo-badge">Hallinta</span></a>
-      <nav class="admin-nav">
-        <a href="/hallinta">Reseptit</a>
-        <a href="/hallinta/kuvat">Kuvat</a>
-        <a href="/hallinta/kirjautumiset" aria-current="page">Kirjautumiset</a>
-        <span class="admin-user" id="adminUser"></span>
-        <a href="/" target="_blank" rel="noopener">Sivusto</a>
-        <button type="button" id="logoutButton">Kirjaudu ulos</button>
-      </nav>
-    </div>
-  </header>
+{{include "admin-header.html"}}
 
   <main class="admin-main">
     <div class="container">
@@ -127,6 +106,7 @@
     </div>
   </main>
 
-  <script src="/js/admin.js"></script>
+  <script src="/js/{{bundle}}.js"></script>
 </body>
+
 </html>

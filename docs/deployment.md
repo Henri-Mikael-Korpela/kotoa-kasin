@@ -115,7 +115,7 @@ need a larger size for traffic.
 - **Everything is written by hand.** About 8,500 lines of C plus 700 lines of
   tests cover what a framework provides: HTTP parsing and routing, sessions
   (JWT), SHA-256 and password hashing, the JavaScript and CSS minifiers, the
-  country lookup. Hand-written code has hand-written bugs: a security review
+  HTML template engine, the country lookup. Hand-written code has hand-written bugs: a security review
   found that addresses starting with `//` could read any file on the server,
   something a framework's file serving would have prevented. It is fixed, and
   the kernel now keeps file access inside the served directories.
@@ -236,8 +236,8 @@ docker exec -it kotoa-kasin-deploy deploy
    `https://kotoa-kasin.<random>.swedencentral.azurecontainerapps.io`, and the
    admin address (`/hallinta`).
 
-Run the same command again whenever you want to publish changes to `src/` or
-`public/`.
+Run the same command again whenever you want to publish changes to `src/`,
+`templates/` or `public/`.
 
 ## What gets created
 

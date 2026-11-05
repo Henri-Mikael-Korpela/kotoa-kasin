@@ -6,7 +6,8 @@ from an admin view at `/hallinta`.
 
 - **Server:** C, Linux only. epoll, one worker per thread, all memory reserved
   at startup, no `malloc` in the request path. Uses SQLite as its only library.
-- **Site:** static pages in `public/`; the front page loads recipes from the API.
+- **Site:** static pages generated from the templates in `templates/` into `public/`; the front
+  page loads recipes from the API.
 - **Admin:** log in at `/hallinta/kirjaudu`, then add, edit and delete recipes
   and categories, manage images and see login attempts.
 
@@ -44,6 +45,7 @@ password first; see [Running locally](docs/local-development.md).
 |---|---|
 | [Recipe editor and images](docs/recipe-editor.md) | Blocks, the storage format, slugs, images and large requests |
 | [Database migrations](docs/database-migrations.md) | How the schema is defined and changed |
+| [HTML templates](docs/html-templating.md) | Generating the pages from templates: variables, includes, conditions and the layout of `templates/` |
 | [JavaScript and CSS bundles](docs/bundles.md) | Building, minifying and separating the public and admin code |
 
 ### Reference

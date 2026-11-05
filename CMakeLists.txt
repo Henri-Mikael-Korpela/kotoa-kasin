@@ -87,6 +87,15 @@ add_executable(kasin-cssbundle
   src/str.c)
 target_compile_options(kasin-cssbundle PRIVATE ${KASIN_WARNINGS})
 
+# Generates the HTML pages in public from the templates in templates/ (see
+# docs/html-templating.md). template.c is the engine, htmlgen.c the files and watch mode.
+add_executable(kasin-htmlgen
+  src/htmlgen.c
+  src/template.c
+  src/arena.c
+  src/str.c)
+target_compile_options(kasin-htmlgen PRIVATE ${KASIN_WARNINGS})
+
 enable_testing()
 add_executable(jsmin-test
   tests/jsmin_test.c
@@ -134,3 +143,10 @@ add_executable(gzip-test
   src/str.c)
 target_compile_options(gzip-test PRIVATE ${KASIN_WARNINGS})
 add_test(NAME gzip COMMAND gzip-test)
+
+add_executable(template-test
+  tests/template_test.c
+  src/template.c
+  src/str.c)
+target_compile_options(template-test PRIVATE ${KASIN_WARNINGS})
+add_test(NAME template COMMAND template-test)

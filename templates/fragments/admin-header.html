@@ -1,0 +1,13 @@
+  <header class="site-header admin-header">
+    <div class="nav-container">
+      <a href="/hallinta" class="logo">Kotoa käsin<span class="logo-badge">Hallinta</span></a>
+      <nav class="admin-nav">
+        <a href="/hallinta"{{if page == "recipes"}} aria-current="page"{{end}}>Reseptit</a>
+        <a href="/hallinta/kuvat"{{if page == "images"}} aria-current="page"{{end}}>Kuvat</a>
+        <a href="/hallinta/kirjautumiset"{{if page == "logins"}} aria-current="page"{{end}}>Kirjautumiset</a>
+        <span class="admin-user" id="adminUser"></span>
+        <a href="/" target="_blank" rel="noopener">Sivusto</a>
+        <button type="button" id="logoutButton">Kirjaudu ulos</button>
+      </nav>
+    </div>
+  </header>

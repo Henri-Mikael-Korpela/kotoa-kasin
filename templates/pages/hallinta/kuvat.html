@@ -1,0 +1,44 @@
+{{set title "Kuvat &mdash; Kotoa käsin"}}
+{{set robots "noindex"}}
+{{set bundle "admin"}}
+{{set page "images"}}
+{{include "head.html"}}
+<body data-page="images">
+
+{{include "admin-header.html"}}
+
+  <main class="admin-main">
+    <div class="container">
+      <div class="admin-toolbar">
+        <div>
+          <h1>Kuvat</h1>
+          <p>Reseptien kuvat. Lataa uusia kuvia painikkeesta tai vetämällä tiedostot sivulle.</p>
+        </div>
+        <label class="btn btn-primary gallery-upload-button">Lataa kuvia
+          <input type="file" id="galleryUpload" accept="image/*" multiple hidden>
+        </label>
+      </div>
+
+      <div class="gallery-drop-zone" id="galleryDropZone" aria-hidden="true">Pudota kuvat ladattaviksi</div>
+      <p class="form-error" id="galleryError" role="alert"></p>
+      <p class="gallery-summary" id="gallerySummary" aria-live="polite">&nbsp;</p>
+
+      <div class="gallery-page-layout">
+        <div class="gallery-page-images">
+          <ul class="gallery-grid gallery-page-grid" id="galleryGrid"></ul>
+          <p class="admin-status" id="galleryStatus" aria-live="polite">Ladataan kuvia&hellip;</p>
+        </div>
+        <aside class="gallery-info gallery-page-info" aria-labelledby="galleryInfoTitle">
+          <div class="gallery-info-header">
+            <h2 id="galleryInfoTitle">Kuvan tiedot</h2>
+          </div>
+          <div class="gallery-info-body" id="galleryInfo" aria-live="polite"></div>
+        </aside>
+      </div>
+    </div>
+  </main>
+
+  <script src="/js/{{bundle}}.js"></script>
+</body>
+
+</html>

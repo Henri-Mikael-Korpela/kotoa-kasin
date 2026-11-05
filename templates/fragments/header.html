@@ -1,0 +1,23 @@
+{{default home_url "/"}}
+  <header class="site-header{{if solid}} is-scrolled{{end}}" id="siteHeader"{{if solid}} data-solid{{end}}>
+    <div class="nav-container">
+      <a href="{{home_url}}" class="logo">Kotoa käsin</a>
+
+      <nav class="nav-links" id="navLinks">
+        <a href="{{home_url}}">Etusivu</a>
+        <div class="nav-item" id="recipesNavItem">
+          <a href="/#reseptit">Reseptit</a>
+          <ul class="nav-submenu" id="categoryMenu" aria-label="Reseptikategoriat" hidden></ul>
+        </div>
+        <a href="/meista"{{if page == "meista"}} aria-current="page"{{end}}>Meistä</a>
+        <a href="/yhteystiedot"{{if page == "yhteystiedot"}} aria-current="page"{{end}}>Yhteystiedot</a>
+      </nav>
+
+      <button class="menu-toggle" id="menuToggle" aria-label="Avaa valikko" aria-expanded="false"
+        aria-controls="navLinks">
+        <span></span>
+        <span></span>
+        <span></span>
+      </button>
+    </div>
+  </header>

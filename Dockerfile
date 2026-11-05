@@ -16,6 +16,9 @@ COPY js ./js
 COPY css ./css
 RUN build/kasin-jsbundle -o bundles/js js/bundles.txt \
  && build/kasin-cssbundle -o bundles/css css/bundles.txt
+# The HTML pages served from / are made from templates/ (see docs/html-templating.md).
+COPY templates ./templates
+RUN build/kasin-htmlgen -o pages templates
 # Countries of login attempts, from DB-IP's monthly data; each deployment gets
 # the latest. Kept outside the served directory. If the download fails, the
 # image is built anyway and attempts are recorded without countries.
@@ -31,6 +34,7 @@ RUN apk add --no-cache sqlite-libs \
 COPY --from=build /src/build/kasin-httpd /usr/local/bin/kasin-httpd
 COPY public /srv/public
 COPY --from=build /src/bundles/ /srv/public/
+COPY --from=build /src/pages/ /srv/public/
 COPY --from=build /src/geoip/ /srv/geoip/
 COPY migrations /srv/migrations
 EXPOSE 8080

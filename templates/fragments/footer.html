@@ -1,0 +1,29 @@
+{{default home_url "/"}}
+{{default recipes_url "/#reseptit"}}
+{{include "contact-info.html"}}
+  <footer class="site-footer" id="yhteystiedot">
+    <div class="container footer-inner">
+      <div class="footer-col">
+        <p class="logo footer-logo">Kotoa käsin</p>
+        <p>Kotitekoista kosmetiikkaa ja ruokaa.</p>
+      </div>
+      <div class="footer-col">
+        <h4>Sivukartta</h4>
+        <a href="{{home_url}}">Kotoa käsin etusivu</a>
+        <a href="{{recipes_url}}">Reseptikokoelma</a>
+        <a href="/yhteystiedot">Lähetä viesti</a>
+      </div>
+      <div class="footer-col">
+        <h4>Meistä</h4>
+        <a href="/meista">Tarinamme</a>
+      </div>
+      <div class="footer-col">
+        <h4>Ota yhteyttä</h4>
+        <a href="mailto:{{email}}">{{email}}</a>
+        <a href="{{facebook_url}}" target="_blank"
+          rel="noopener noreferrer">Facebook</a>
+        <a href="{{instagram_url}}" target="_blank" rel="noopener noreferrer">Instagram</a>
+      </div>
+    </div>
+    <p class="footer-copy">&copy; <span id="year"></span> Kotoa käsin. Kaikki oikeudet pidätetään.</p>
+  </footer>

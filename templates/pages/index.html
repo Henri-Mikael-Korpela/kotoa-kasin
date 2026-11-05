@@ -1,0 +1,60 @@
+{{set title "Kotoa käsin &mdash; kotitekoista kosmetiikkaa ja ruokaa"}}
+{{set description "Kotoa käsin &ndash; käsintehtyjä luonnonkosmetiikan reseptejä ja kotiruokaa yrteistä ja marjoista."}}
+{{set page "home"}}
+{{set home_url "#top"}}
+{{set recipes_url "#reseptit"}}
+{{include "head.html"}}
+
+<body>
+
+{{include "header.html"}}
+
+  <main>
+
+    <section class="hero" id="top">
+      <div class="hero-media">
+        <img src="assets/cover.webp" alt="Syreenipensas kukassa" class="hero-image">
+        <div class="hero-overlay"></div>
+      </div>
+      <div class="hero-content">
+        <h1 class="hero-title">Kotoa käsin</h1>
+        <p class="hero-subtitle">Kotitekoista kosmetiikkaa ja ruokaa</p>
+        <a href="#reseptit" class="btn btn-outline">Tutustu resepteihin</a>
+      </div>
+      <a href="#reseptit" class="scroll-cue" aria-label="Vieritä alas">&darr;</a>
+    </section>
+
+    <section class="intro">
+      <div class="container intro-inner">
+        <h2>Tervetuloa</h2>
+        <p>
+          Kotoa käsin on kokoelma käsintehtyjä reseptejä &ndash; saippuoita, voiteita
+          ja muita luonnonkosmetiikan pieniä ihmeitä sekä kotiruokaa, jossa tavoitteena on hyödyntää oman puutarhan
+          ja lähimetsän antimia. Jokainen resepti on testattu omassa
+          keittiössä ja tehty jaettavaksi.
+        </p>
+      </div>
+    </section>
+
+    <section class="recipes" id="reseptit">
+      <div class="container">
+        <div class="section-heading">
+          <h2>Reseptejä ja tekemisen iloa</h2>
+          <p>Valikoima suosikkeja kosmetiikan ja ruoan maailmasta</p>
+        </div>
+
+        <p class="recipe-filter" id="recipeFilter" hidden></p>
+
+        <div class="recipe-grid" id="recipeGrid" aria-live="polite">
+          <p class="recipe-grid-status">Ladataan reseptejä&hellip;</p>
+        </div>
+      </div>
+    </section>
+  </main>
+
+{{include "footer.html"}}
+
+  <script src="/js/{{bundle}}.js"></script>
+</body>
+
+</html>

@@ -1,7 +1,7 @@
 # The production image needs only CMakeLists.txt, src/, tests/, js/, scripts/, css/,
-# public/ and migrations/. Keeping everything else out also keeps `az acr build`
-# uploads small. public/js and public/css hold bundles built locally; the image
-# builds its own from js/ and css/.
+# templates/, public/ and migrations/. Keeping everything else out also keeps `az acr build`
+# uploads small. public/js, public/css and the .html pages in public hold files generated
+# locally; the image builds its own from js/, css/ and templates/.
 *
 !CMakeLists.txt
 !src/
@@ -9,7 +9,10 @@
 !js/
 !scripts/
 !css/
+!templates/
 !public/
 !migrations/
 public/js/
 public/css/
+public/*.html
+public/hallinta/*.html

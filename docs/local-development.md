@@ -30,7 +30,7 @@ The admin view is at
 
 Note: `.env` is in `.gitignore`; never commit it. See [Admin password](admin-password.md).
 
-Server code interacts with the container you built. After changing C code, run `docker compose -f dev.docker-compose.yml restart httpd` to rebuild the server. Files in `public/` are served directly; changes show up on reload.
+Server code interacts with the container you built. After changing C code, run `docker compose -f dev.docker-compose.yml restart httpd` to rebuild the server. Files in `public/` are served directly; changes show up on reload. The HTML pages in `public/` are generated from `templates/` (see [HTML templates](html-templating.md)): edit the templates, not the pages. A watcher in the container generates the pages again on every save.
 
 The database lives in the `db-data` Docker volume (`/data/kotoa.db` in the container) and survives restarts. `docker compose down -v` deletes it.
 
