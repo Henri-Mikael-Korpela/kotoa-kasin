@@ -176,7 +176,10 @@ function createRecipeCard(recipe) {
     title.appendChild(titleLink);
     const description = document.createElement('p');
     description.textContent = recipe.excerpt;
-    info.append(tag, title, description);
+    const dates = document.createElement('p');
+    dates.className = 'recipe-dates';
+    dates.textContent = recipeDatesText(recipe);
+    info.append(tag, title, description, dates);
 
     card.append(thumb, info);
     return card;
@@ -225,14 +228,16 @@ function recipeRequest() {
     return id ? '/api/recipes/' + encodeURIComponent(id) : null;
 }
 
-// A UTC timestamp from the API as a Finnish date, or '' when it is not a valid time.
+// A UTC timestamp from the API as a Finnish date and time, or '' when it is not a valid time.
 function formatDate(timestamp) {
     const date = new Date(timestamp);
-    return isNaN(date.getTime()) ? '' : date.toLocaleDateString('fi-FI');
+    return isNaN(date.getTime())
+        ? ''
+        : date.toLocaleString('fi-FI', { dateStyle: 'short', timeStyle: 'short' });
 }
 
-// "Julkaistu 1.2.2026 · Muokattu 3.2.2026"; the edit date is left out when it
-// is the same day as the publishing.
+// "Julkaistu 1.2.2026 klo 12.00 · Muokattu 3.2.2026 klo 9.30"; the edit time is
+// left out when the recipe has not been edited since it was published.
 function recipeDatesText(recipe) {
     const created = formatDate(recipe.created_at);
     const updated = formatDate(recipe.updated_at);
@@ -240,7 +245,7 @@ function recipeDatesText(recipe) {
     if (created) {
         parts.push('Julkaistu ' + created);
     }
-    if (updated && updated !== created) {
+    if (updated && recipe.updated_at !== recipe.created_at) {
         parts.push('Muokattu ' + updated);
     }
     return parts.join(' · ');

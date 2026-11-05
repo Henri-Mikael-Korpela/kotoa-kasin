@@ -1750,7 +1750,8 @@ static void api_get_recipe_by_slug(Worker *w, Conn *c, Request const *r, Str slu
  *   POST   /api/logout            -> {}, clears the session cookie
  *   GET    /api/session           (auth) -> {username, expires_at}
  *
- *   GET    /api/recipes           -> [{id, slug, name, image, excerpt, category_id, category}, ...]
+ *   GET    /api/recipes           -> [{id, slug, name, image, excerpt, category_id, category,
+ *                                    created_at, updated_at}, ...]
  *   POST   /api/recipes           (auth) {slug, name, image, description, category_id} -> 201 {id},
  *                                 or 409 if another recipe has the slug
  *   GET    /api/recipes/{id}      -> {id, slug, name, image, description, category_id, category,

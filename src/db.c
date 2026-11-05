@@ -217,7 +217,8 @@ bool db_prepare_file(Str path, DB_Storage storage, Str migrations_dir) {
 // Columns of a recipe in list views.
 #define RECIPE_SUMMARY_JSON                                              \
     "json_object('id', r.id, 'slug', r.slug, 'name', r.name, 'image', r.image," \
-    " 'excerpt', " RECIPE_EXCERPT ", 'category_id', c.id, 'category', c.name)"
+    " 'excerpt', " RECIPE_EXCERPT ", 'category_id', c.id, 'category', c.name,"  \
+    " 'created_at', r.created_at, 'updated_at', r.updated_at)"
 
 // Where an image is served from, and how many recipes show it.
 #define IMAGE_URL "('/uploads/' || i.id || '.' || i.extension)"
