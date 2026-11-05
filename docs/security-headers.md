@@ -16,7 +16,7 @@ Every response, pages, files and API alike, carries these headers
 ## The two policies
 
 **Strict: admin pages, the API and files.** Scripts, styles, images and API calls
-only from this site, plus Google Fonts; no inline scripts or styles, no plugins, no
+only from this site (the fonts too, see [Fonts](fonts.md)); no inline scripts or styles, no plugins, no
 `<base>`; forms only to this site. This matters because an injected script could
 call the API as the logged-in admin; the policy keeps such a script from running.
 

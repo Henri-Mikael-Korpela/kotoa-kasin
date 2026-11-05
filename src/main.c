@@ -301,6 +301,10 @@ static MIME_Type const MIME_TABLE[] = {
         .mime = STR_INIT("image/webp"),
     },
     {
+        .ext = STR_INIT(".woff2"),
+        .mime = STR_INIT("font/woff2"),
+    },
+    {
         .ext = STR_INIT(".wasm"),
         .mime = STR_INIT("application/wasm"),
     },
@@ -403,14 +407,14 @@ static Str const SECURITY_HEADERS = STR_INIT(
  * The session token lives in an HttpOnly cookie, so no script can read it, but
  * an injected script could still call the API as the logged-in admin. This
  * policy is the safety net: the admin pages have no inline scripts or styles,
- * and load scripts, styles, images and API calls only from this site (plus
- * Google Fonts), so an injected <script>, inline handler or style, or a request
+ * and load scripts, styles, fonts, images and API calls only from this site, so
+ * an injected <script>, inline handler or style, or a request
  * to another site does not run. blob: images are the upload preview of browsers
  * without createImageBitmap().
  */
 static Str const STRICT_CSP = STR_INIT(
     "Content-Security-Policy: default-src 'self'; script-src 'self'; "
-    "style-src 'self' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; "
+    "style-src 'self'; font-src 'self'; "
     "img-src 'self' blob:; connect-src 'self'; object-src 'none'; base-uri 'none'; "
     "form-action 'self'; frame-ancestors 'none'\r\n");
 

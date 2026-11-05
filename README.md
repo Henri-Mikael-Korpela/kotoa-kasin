@@ -38,6 +38,7 @@ password first; see [Running locally](docs/local-development.md).
 | [Admin password](docs/admin-password.md) | The salted, slow password hash and where it is stored |
 | [Login protection](docs/login-protection.md) | Waits and bans, client addresses, logs, the Kirjautumiset view and countries |
 | [Security headers](docs/security-headers.md) | Content Security Policy and the other headers sent with every response |
+| [Fonts](docs/fonts.md) | The self-hosted fonts and their licences |
 
 ### The site and its content
 
