@@ -1753,7 +1753,8 @@ static void api_get_recipe_by_slug(Worker *w, Conn *c, Request const *r, Str slu
  *   GET    /api/recipes           -> [{id, slug, name, image, excerpt, category_id, category}, ...]
  *   POST   /api/recipes           (auth) {slug, name, image, description, category_id} -> 201 {id},
  *                                 or 409 if another recipe has the slug
- *   GET    /api/recipes/{id}      -> {id, slug, name, image, description, category_id, category}
+ *   GET    /api/recipes/{id}      -> {id, slug, name, image, description, category_id, category,
+ *                                    created_at, updated_at}
  *   GET    /api/recipes/slug/{slug} -> the same, found by slug
  *   PUT    /api/recipes/{id}      (auth) {slug, name, image, description, category_id} -> {id},
  *                                 or 409 if another recipe has the slug

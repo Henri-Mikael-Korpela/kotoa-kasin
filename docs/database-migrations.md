@@ -12,6 +12,8 @@ order when the server starts:
 | `0003__create_images_table.sql` | The `images` table for uploaded images |
 | `0004__allow_longer_recipe_descriptions.sql` | Descriptions up to 50,000 characters, for editor blocks |
 | `0005__add_recipe_slugs.sql` | The unique `slug` of each recipe, made from the names of existing recipes |
+| `0006__create_login_tables.sql` | Tables for login attempts and clients |
+| `0007__add_recipe_timestamps.sql` | `created_at` and `updated_at` of recipes, kept by the database (a trigger updates the latter) |
 
 **Naming:** `<number>__<name>.sql`, for example `0003__add_servings_to_recipes.sql`:
 four digits, two underscores, then lowercase letters, digits and underscores.

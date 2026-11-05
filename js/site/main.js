@@ -225,6 +225,27 @@ function recipeRequest() {
     return id ? '/api/recipes/' + encodeURIComponent(id) : null;
 }
 
+// A UTC timestamp from the API as a Finnish date, or '' when it is not a valid time.
+function formatDate(timestamp) {
+    const date = new Date(timestamp);
+    return isNaN(date.getTime()) ? '' : date.toLocaleDateString('fi-FI');
+}
+
+// "Julkaistu 1.2.2026 · Muokattu 3.2.2026"; the edit date is left out when it
+// is the same day as the publishing.
+function recipeDatesText(recipe) {
+    const created = formatDate(recipe.created_at);
+    const updated = formatDate(recipe.updated_at);
+    const parts = [];
+    if (created) {
+        parts.push('Julkaistu ' + created);
+    }
+    if (updated && updated !== created) {
+        parts.push('Muokattu ' + updated);
+    }
+    return parts.join(' · ');
+}
+
 function showRecipe(recipe, page, status) {
     if (window.location.pathname !== recipeUrl(recipe)) {
         window.history.replaceState(null, '', recipeUrl(recipe));
@@ -235,6 +256,7 @@ function showRecipe(recipe, page, status) {
     // Not the bare category name: the menu's link to it has that text.
     tag.textContent = 'Lisää kategoriasta ' + recipe.category;
     document.getElementById('recipeName').textContent = recipe.name;
+    document.getElementById('recipeDates').textContent = recipeDatesText(recipe);
 
     const cover = document.getElementById('recipeCover');
     const src = KasinBlocks.safeSrc(recipe.image);

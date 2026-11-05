@@ -860,6 +860,16 @@ a.recipe-tag:hover {
   margin-bottom: 0.6em;
 }
 
+.recipe-dates {
+  margin: 0 0 1.6rem;
+  font-size: 0.85rem;
+  color: var(--color-text-muted);
+}
+
+.recipe-dates:empty {
+  display: none;
+}
+
 .recipe-cover {
   margin: 0 0 2.6rem;
   border-radius: 3px;

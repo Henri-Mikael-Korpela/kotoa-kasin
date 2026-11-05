@@ -194,7 +194,8 @@ bool db_prepare_file(Str path, DB_Storage storage, Str migrations_dir) {
 // Columns of a recipe joined with its category, in the shape the API returns.
 #define RECIPE_JSON                                                      \
     "json_object('id', r.id, 'slug', r.slug, 'name', r.name, 'image', r.image," \
-    " 'description', r.description, 'category_id', c.id, 'category', c.name)"
+    " 'description', r.description, 'category_id', c.id, 'category', c.name,"  \
+    " 'created_at', r.created_at, 'updated_at', r.updated_at)"
 
 /*
  * Plain text for list views, from the start of a recipe description: the text
