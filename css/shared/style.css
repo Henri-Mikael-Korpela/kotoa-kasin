@@ -692,7 +692,7 @@ a.recipe-tag:hover {
   margin-bottom: 0.6em;
 }
 
-.footer-col h4 {
+.footer-col h2 {
   color: var(--color-white);
   font-family: var(--font-body);
   font-size: 0.85rem;
