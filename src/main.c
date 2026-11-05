@@ -43,6 +43,7 @@
 #include <sys/sendfile.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
+#include <sys/statvfs.h>
 #include <sys/syscall.h>
 #include <sysexits.h>
 #include <time.h>
@@ -174,6 +175,7 @@ typedef struct Worker {
 static volatile sig_atomic_t STOP_REQUESTED = 0;
 static int ROOT_FD = -1;  // Directory static files are served from.
 static int UPLOADS_FD = -1;  // Directory uploaded images are stored in.
+static bool UPLOADS_ON_SHARE = false;  // True when the storage is a network share (Azure Files).
 static uint8_t JWT_KEY[SHA256_DIGEST_SIZE];  // Signs session tokens.
 
 static Str const ADMIN_USERNAME = STR_INIT("hanna");
@@ -370,6 +372,8 @@ static Str status_reason(int status) {
         return STR("Request Header Fields Too Large");
     case 503:
         return STR("Service Unavailable");
+    case 507:
+        return STR("Insufficient Storage");
     case 505:
         return STR("HTTP Version Not Supported");
     default:
@@ -1566,6 +1570,51 @@ static bool write_upload(Str file_name, Str bytes) {
     return ok;
 }
 
+/** The space of the file system that holds the uploads, in bytes. */
+typedef struct {
+    bool     known;      /**< False when the file system did not tell. */
+    uint64_t total;      /**< Size of the file system; on Azure Files the share quota. */
+    uint64_t available;  /**< Space left for new files. */
+} Storage_Space;
+
+static Storage_Space uploads_space(void) {
+    Storage_Space space = {
+        .known = false,
+        .total = 0,
+        .available = 0,
+    };
+    struct statvfs fs;
+    if (UPLOADS_FD < 0 || fstatvfs(UPLOADS_FD, &fs) != 0) {
+        return space;
+    }
+    space.known = true;
+    space.total = (uint64_t)fs.f_blocks * (uint64_t)fs.f_frsize;
+    space.available = (uint64_t)fs.f_bavail * (uint64_t)fs.f_frsize;
+    return space;
+}
+
+static void api_storage(Conn *c, Request const *r) {
+    if (!authenticate(r, NULL)) {
+        respond_unauthorized(c);
+        return;
+    }
+    Storage_Space const space = uploads_space();
+    Str_Builder body;
+    body_begin(c, &body);
+    if (!space.known) {
+        str_builder_append(&body, STR("{\"kind\":null,\"total\":null,\"available\":null}"));
+    } else {
+        str_builder_append(&body, STR("{\"kind\":\""));
+        str_builder_append(&body, UPLOADS_ON_SHARE ? STR("share") : STR("disk"));
+        str_builder_append(&body, STR("\",\"total\":"));
+        str_builder_append_u64(&body, space.total);
+        str_builder_append(&body, STR(",\"available\":"));
+        str_builder_append_u64(&body, space.available);
+        str_builder_append(&body, STR("}"));
+    }
+    respond_json(c, 200, &body, r->head_only, NO_STORE);
+}
+
 static void api_upload_image(Worker *w, Conn *c, Request const *r) {
     if (!authenticate(r, NULL)) {
         respond_unauthorized(c);
@@ -1575,6 +1624,11 @@ static void api_upload_image(Worker *w, Conn *c, Request const *r) {
     if (extension.len == 0) {
         respond_json_error(c, 415, STR("only JPEG, PNG, GIF and WebP images are accepted"),
                            NO_STORE);
+        return;
+    }
+    Storage_Space const space = uploads_space();
+    if (space.known && r->body.len > space.available) {
+        respond_json_error(c, 507, STR("not enough storage space left"), NO_STORE);
         return;
     }
 
@@ -1769,7 +1823,11 @@ static void api_get_recipe_by_slug(Worker *w, Conn *c, Request const *r, Str slu
  *
  *   GET    /api/images            (auth) -> [{id, url, original_name, size, created_at, used,
  *                                 recipes}, ...]
- *   POST   /api/images            (auth) raw JPEG/PNG/GIF/WebP body, X-File-Name -> 201 {id, url}
+ *   POST   /api/images            (auth) raw JPEG/PNG/GIF/WebP body, X-File-Name -> 201 {id, url},
+ *                                 or 507 when the storage has no room for it
+ *   GET    /api/storage           (auth) -> {kind, total, available}: kind is "share" (Azure
+ *                                 Files, total is its quota) or "disk"; sizes in bytes;
+ *                                 all null if unknown
  *   DELETE /api/images/{id}       (auth) -> {id}, or 409 while a recipe shows it
  *
  *   GET    /api/login-attempts    (auth) -> {now, blocked: [{ip, failures, until, banned}, ...],
@@ -1830,6 +1888,14 @@ static void handle_api(Worker *w, Conn *c, Request const *r) {
     if (str_starts_with(r->path, by_slug)) {
         if (str_eq(r->method, STR("GET")) || r->head_only) {
             api_get_recipe_by_slug(w, c, r, str_slice(r->path, by_slug.len, r->path.len));
+        } else {
+            respond_method_not_allowed(c, ALLOW_GET_HEAD);
+        }
+        return;
+    }
+    if (str_eq(r->path, STR("/api/storage"))) {
+        if (str_eq(r->method, STR("GET")) || r->head_only) {
+            api_storage(c, r);
         } else {
             respond_method_not_allowed(c, ALLOW_GET_HEAD);
         }
@@ -2560,6 +2626,7 @@ static void open_directories(Settings const *settings) {
                     uploads_z, strerror(errno));
         }
         UPLOADS_FD = open(uploads_z, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+        UPLOADS_ON_SHARE = settings->db_storage == DB_STORAGE_SHARE;
     }
     if (UPLOADS_FD < 0) {
         fprintf(stderr, "warning: cannot open uploads directory '%.*s'; image uploads are off\n",

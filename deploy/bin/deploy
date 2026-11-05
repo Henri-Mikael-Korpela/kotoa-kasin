@@ -80,6 +80,7 @@ LOCATION=$AZURE_LOCATION
 ENV_NAME=$AZURE_CONTAINERAPP_ENV
 APP_NAME=$AZURE_CONTAINERAPP_NAME
 SHARE=$AZURE_FILE_SHARE
+SHARE_QUOTA_GB=${AZURE_FILE_SHARE_QUOTA_GB:-1}
 ENV_STORAGE=data  # Name of the share's link inside the Container Apps environment.
 
 # Sign in.
@@ -190,7 +191,15 @@ share_exists=$(az storage share-rm exists --storage-account "$STORAGE_ACCOUNT" \
 if [ "$share_exists" != "true" ]; then
     step "Creating file share $SHARE"
     az storage share-rm create --storage-account "$STORAGE_ACCOUNT" --resource-group "$RG" \
-        --name "$SHARE" --quota 1 --output none
+        --name "$SHARE" --quota "$SHARE_QUOTA_GB" --output none
+else
+    current_quota=$(az storage share-rm show --storage-account "$STORAGE_ACCOUNT" \
+        --resource-group "$RG" --name "$SHARE" --query shareQuota --output tsv)
+    if [ "$current_quota" != "$SHARE_QUOTA_GB" ]; then
+        step "Setting the quota of file share $SHARE to $SHARE_QUOTA_GB GiB"
+        az storage share-rm update --storage-account "$STORAGE_ACCOUNT" --resource-group "$RG" \
+            --name "$SHARE" --quota "$SHARE_QUOTA_GB" --output none
+    fi
 fi
 STORAGE_KEY=$(az storage account keys list --account-name "$STORAGE_ACCOUNT" \
     --resource-group "$RG" --query '[0].value' --output tsv)

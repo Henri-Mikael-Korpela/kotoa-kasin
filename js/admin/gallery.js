@@ -22,8 +22,11 @@ const KasinGallery = (function () {
     }
 
     function formatSize(bytes) {
+        if (bytes >= 1024 * 1024 * 1024) {
+            return (bytes / (1024 * 1024 * 1024)).toFixed(2).replace('.', ',') + ' Gt';
+        }
         return bytes >= 1024 * 1024
-            ? (bytes / (1024 * 1024)).toFixed(1).replace('.', ',') + ' Mt'
+            ?(bytes / (1024 * 1024)).toFixed(1).replace('.', ',') + ' Mt'
             : Math.max(1, Math.round(bytes / 1024)) + ' kt';
     }
 
@@ -677,6 +680,7 @@ const KasinGallery = (function () {
         const summary = document.getElementById('gallerySummary');
         const infoBody = document.getElementById('galleryInfo');
         let images = [];
+        let storage = null;
         let selectedId = null;
         setupLogout();
 
@@ -724,6 +728,46 @@ const KasinGallery = (function () {
             size.textContent = formatSize(total);
             summary.replaceChildren(count, document.createTextNode(', levytilaa käytetty yhteensä '), size);
             summary.title = total.toLocaleString('fi-FI') + ' tavua';
+            if (storage && storage.total !== null) {
+                // Free space is for the whole share or disk, which also holds the database.
+                const label = storage.kind === 'share' ? '. Tallennustilaa jäljellä ' : '. Levytilaa jäljellä ';
+                const left = document.createElement('strong');
+                left.textContent = formatSize(storage.available);
+                const all = document.createElement('strong');
+                all.textContent = formatSize(storage.total);
+                summary.append(
+                    document.createTextNode(label), left,
+                    document.createTextNode(' / '), all);
+            }
+            showStorageBar();
+        }
+
+        // The bar of the storage in use, whole share or disk, not only the images.
+        function showStorageBar() {
+            const box = document.getElementById('galleryStorage');
+            if (!storage || !storage.total) {
+                box.hidden = true;
+                return;
+            }
+            const used = Math.max(0, storage.total - storage.available);
+            const percent = Math.min(100, Math.round(used * 100 / storage.total));
+            const bar = document.getElementById('galleryStorageBar');
+            bar.setAttribute('aria-valuenow', String(percent));
+            bar.classList.toggle('is-full', percent >= 90);
+            document.getElementById('galleryStorageFill').style.width = percent + '%';
+            document.getElementById('galleryStoragePercent').textContent = percent + ' %';
+            document.getElementById('galleryStorageNumbers').textContent =
+                formatSize(used) + ' / ' + formatSize(storage.total);
+            box.hidden = false;
+        }
+
+        // The size and free space of the storage. The gallery works without it.
+        async function loadStorage() {
+            try {
+                storage = await api('GET', '/api/storage');
+            } catch (error) {
+                storage = null;
+            }
         }
 
         async function load() {
@@ -738,6 +782,7 @@ const KasinGallery = (function () {
                 return;
             }
             images = list;
+            await loadStorage();
             status.hidden = images.length > 0;
             status.textContent = 'Kuvia ei ole vielä. Lataa ensimmäinen yllä olevasta painikkeesta tai vedä kuvat tähän.';
             const cards = [];

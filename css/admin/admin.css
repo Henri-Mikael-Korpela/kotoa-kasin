@@ -931,6 +931,50 @@ body.is-dragging-block {
   color: var(--color-text);
 }
 
+.storage-usage {
+  margin: 0 0 1rem;
+}
+
+.storage-usage-row {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+.storage-usage-bar {
+  flex: 1;
+  height: 12px;
+  border-radius: 6px;
+  overflow: hidden;
+  background: var(--color-bg-alt);
+}
+
+.storage-usage-fill {
+  display: block;
+  height: 100%;
+  width: 0;
+  border-radius: 6px;
+  background: var(--color-lilac-dark);
+}
+
+/* Nearly full: the colour warns before uploads start to fail. */
+.storage-usage-bar.is-full .storage-usage-fill {
+  background: #b3412f;
+}
+
+.storage-usage-percent {
+  min-width: 3ch;
+  text-align: right;
+  font-size: 0.9rem;
+  color: var(--color-text-muted);
+}
+
+.storage-usage-numbers {
+  margin: 0.3rem 0 0;
+  font-size: 0.85rem;
+  color: var(--color-text-muted);
+}
+
 .gallery-page-layout {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 320px;

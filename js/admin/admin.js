@@ -107,6 +107,9 @@ function messageFor(error, fallback) {
     if (error.status === 503) {
         return 'Tietokanta on hetkellisesti varattu. Yritä uudelleen.';
     }
+    if (error.status === 507) {
+        return 'Tallennustila on täynnä. Poista kuvia tai kasvata tallennustilaa.';
+    }
     return fallback;
 }
 

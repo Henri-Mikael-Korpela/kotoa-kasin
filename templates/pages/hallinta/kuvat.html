@@ -23,6 +23,16 @@
       <p class="form-error" id="galleryError" role="alert"></p>
       <p class="gallery-summary" id="gallerySummary" aria-live="polite">&nbsp;</p>
 
+      <div class="storage-usage" id="galleryStorage" hidden>
+        <div class="storage-usage-row">
+          <div class="storage-usage-bar" id="galleryStorageBar" role="meter" aria-label="Käytetty tallennustila" aria-valuemin="0" aria-valuemax="100">
+            <span class="storage-usage-fill" id="galleryStorageFill"></span>
+          </div>
+          <span class="storage-usage-percent" id="galleryStoragePercent"></span>
+        </div>
+        <p class="storage-usage-numbers" id="galleryStorageNumbers"></p>
+      </div>
+
       <div class="gallery-page-layout">
         <div class="gallery-page-images">
           <ul class="gallery-grid gallery-page-grid" id="galleryGrid"></ul>

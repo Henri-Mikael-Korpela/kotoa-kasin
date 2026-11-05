@@ -201,6 +201,7 @@ AZURE_TENANT=<example.onmicrosoft.com or tenant id>
 | `AZURE_ACR_NAME` | *(empty)* | Container registry. Globally unique, 5-50 letters and digits. Empty gives `kotoakasin` plus 8 characters of your subscription id. |
 | `AZURE_STORAGE_ACCOUNT` | *(empty)* | Storage account. Globally unique, 3-24 lowercase letters and digits. Empty gives the same default as the registry. |
 | `AZURE_FILE_SHARE` | `kotoa-data` | File share holding the database. 3-63 lowercase letters, digits and `-`. |
+| `AZURE_FILE_SHARE_QUOTA_GB` | `1` | Size limit of the file share in GiB, for the database and the uploaded images together. The server reads the free space from the share, shows it in the image gallery and refuses uploads that do not fit (HTTP 507). Changing it applies on the next `deploy`. |
 
 The defaults work as they are, so for most people the file needs no changes.
 Set the two globally unique names yourself only if the defaults are already
