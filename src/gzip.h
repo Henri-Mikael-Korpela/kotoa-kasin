@@ -14,6 +14,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "byte.h"
 #include "str.h"
 
 /**
@@ -33,6 +34,6 @@ enum {
  * @return The length of the stream, or 0 when the input is too long or the stream does
  *         not fit in out (the caller then sends the input as it is).
  */
-size_t gzip_compress(Str input, uint8_t *out, size_t capacity);
+size_t gzip_compress(Str input, byte *out, size_t capacity);
 
 #endif  // __KASIN_GZIP_H__

@@ -9,6 +9,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "byte.h"
+
 enum {
     /** Size of a SHA-256 digest, in bytes. */
     SHA256_DIGEST_SIZE = 32,
@@ -19,7 +21,7 @@ enum {
 typedef struct {
     uint32_t state[8];
     uint64_t total_len;
-    uint8_t  block[SHA256_BLOCK_SIZE];
+    byte     block[SHA256_BLOCK_SIZE];
     size_t   block_len;
 } SHA256;
 
@@ -36,12 +38,12 @@ void sha256_update(SHA256 *ctx, void const *data, size_t len);
 /**
  * Finishes the hash and writes the 32-byte digest.
  */
-void sha256_final(SHA256 *ctx, uint8_t out[SHA256_DIGEST_SIZE]);
+void sha256_final(SHA256 *ctx, byte out[SHA256_DIGEST_SIZE]);
 
 /**
  * Computes HMAC-SHA256 of a message with a key of any length.
  */
 void hmac_sha256(void const *key, size_t key_len, void const *msg, size_t msg_len,
-                 uint8_t out[SHA256_DIGEST_SIZE]);
+                 byte out[SHA256_DIGEST_SIZE]);
 
 #endif  // __KASIN_SHA256_H__

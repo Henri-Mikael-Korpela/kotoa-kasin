@@ -1,6 +1,7 @@
 #include <assert.h>
 #include <stdint.h>
 
+#include "byte.h"
 #include "jsmin.h"
 
 enum {
@@ -40,7 +41,7 @@ typedef struct {
     size_t        pos;
     /** The last token returned, to tell a regular expression from a division. */
     Token         prev;
-    uint8_t       braces[MAX_BRACE_DEPTH];
+    byte          braces[MAX_BRACE_DEPTH];
     size_t        brace_depth;
     Minify_Error *error;
 } Lexer;
@@ -134,8 +135,11 @@ static Str const HEAD_KEYWORDS[] = {
  */
 #define COUNT_OF(array) (sizeof (array) / sizeof (array)[0])
 
-static unsigned char byte_at(Str s, size_t i) {
-    return i < s.len ? (unsigned char)s.data[i] : 0;
+static byte byte_at(Str s, size_t i) {
+    if (i < s.len) {
+        return (byte)s.data[i];
+    }
+    return 0;
 }
 
 static bool is_one_of(Str s, Str const *list, size_t count) {
@@ -151,11 +155,11 @@ static bool token_is(Token const *t, Str punct) {
     return t->kind == TOKEN_PUNCT && str_eq(t->text, punct);
 }
 
-static bool is_digit(unsigned char c) {
+static bool is_digit(byte c) {
     return c >= '0' && c <= '9';
 }
 
-static bool is_ascii_letter(unsigned char c) {
+static bool is_ascii_letter(byte c) {
     return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z');
 }
 
@@ -163,7 +167,7 @@ static bool is_ascii_letter(unsigned char c) {
  * Whether a byte can be part of an identifier, number or keyword. Bytes of
  * multi-byte UTF-8 characters count, so non-ASCII names stay whole.
  */
-static bool is_word_byte(unsigned char c) {
+static bool is_word_byte(byte c) {
     return is_ascii_letter(c) || is_digit(c) || c == '_' || c == '$' || c == '\\' || c >= 0x80;
 }
 
@@ -174,7 +178,7 @@ static bool is_word_byte(unsigned char c) {
  */
 static size_t space_at(Str s, size_t pos, bool *line_break) {
     assert(line_break != NULL);
-    unsigned char const c = byte_at(s, pos);
+    byte const c = byte_at(s, pos);
     *line_break = false;
     if (c == ' ' || c == '\t' || c == '\v' || c == '\f') {
         return 1;
@@ -242,7 +246,7 @@ static bool push_brace(Lexer *lx, Brace_Kind kind, size_t offset) {
     if (lx->brace_depth == MAX_BRACE_DEPTH) {
         return fail(lx->error, lx->source, offset, STR("braces nested too deeply"));
     }
-    lx->braces[lx->brace_depth++] = (uint8_t)kind;
+    lx->braces[lx->brace_depth++] = (byte)kind;
     return true;
 }
 
@@ -289,10 +293,10 @@ static bool skip_space(Lexer *lx, bool *newline) {
 static bool scan_string(Lexer *lx, Token *token) {
     assert(token != NULL);
     Str const s = lx->source;
-    unsigned char const quote = byte_at(s, lx->pos);
+    byte const quote = byte_at(s, lx->pos);
     size_t pos = lx->pos + 1;
     while (pos < s.len) {
-        unsigned char const c = byte_at(s, pos);
+        byte const c = byte_at(s, pos);
         if (c == quote) {
             token->kind = TOKEN_STRING;
             lx->pos = pos + 1;
@@ -300,7 +304,11 @@ static bool scan_string(Lexer *lx, Token *token) {
         }
         if (c == '\\') {
             // An escaped "\r\n" is one line continuation.
-            pos += byte_at(s, pos + 1) == '\r' && byte_at(s, pos + 2) == '\n' ? 3 : 2;
+            if (byte_at(s, pos + 1) == '\r' && byte_at(s, pos + 2) == '\n') {
+                pos += 3;
+            } else {
+                pos += 2;
+            }
         } else if (c == '\n' || c == '\r') {
             break;
         } else {
@@ -319,15 +327,21 @@ static bool scan_template(Lexer *lx, Token *token, bool head) {
     Str const s = lx->source;
     size_t pos = lx->pos + 1;
     while (pos < s.len) {
-        unsigned char const c = byte_at(s, pos);
+        byte const c = byte_at(s, pos);
         if (c == '\\') {
             pos += 2;
         } else if (c == '`') {
-            token->kind = head ? TOKEN_TEMPLATE : TOKEN_TEMPLATE_TAIL;
+            token->kind = TOKEN_TEMPLATE_TAIL;
+            if (head) {
+                token->kind = TOKEN_TEMPLATE;
+            }
             lx->pos = pos + 1;
             return true;
         } else if (c == '$' && byte_at(s, pos + 1) == '{') {
-            token->kind = head ? TOKEN_TEMPLATE_HEAD : TOKEN_TEMPLATE_MIDDLE;
+            token->kind = TOKEN_TEMPLATE_MIDDLE;
+            if (head) {
+                token->kind = TOKEN_TEMPLATE_HEAD;
+            }
             lx->pos = pos + 2;
             return push_brace(lx, BRACE_TEMPLATE, pos);
         } else {
@@ -343,7 +357,7 @@ static bool scan_regex(Lexer *lx, Token *token) {
     size_t pos = lx->pos + 1;
     bool in_class = false;
     while (pos < s.len) {
-        unsigned char const c = byte_at(s, pos);
+        byte const c = byte_at(s, pos);
         if (c == '\\') {
             pos += 2;
             continue;
@@ -373,7 +387,7 @@ static void scan_number(Lexer *lx, Token *token) {
     assert(token != NULL);
     Str const s = lx->source;
     size_t pos = lx->pos;
-    unsigned char const second = byte_at(s, pos + 1);
+    byte const second = byte_at(s, pos + 1);
     bool const radix_prefix = byte_at(s, pos) == '0' &&
                               (second == 'x' || second == 'X' || second == 'b' || second == 'B' ||
                                second == 'o' || second == 'O');
@@ -387,7 +401,7 @@ static void scan_number(Lexer *lx, Token *token) {
         bool dot = false;
         bool exponent = false;
         while (pos < s.len) {
-            unsigned char const c = byte_at(s, pos);
+            byte const c = byte_at(s, pos);
             if (is_digit(c) || c == '_') {
                 pos++;
             } else if (c == '.' && !dot && !exponent) {
@@ -420,16 +434,23 @@ static void scan_word(Lexer *lx, Token *token) {
     }
     while (pos < s.len) {
         bool line_break;
-        unsigned char const c = byte_at(s, pos);
+        byte const c = byte_at(s, pos);
         if (!is_word_byte(c) || space_at(s, pos, &line_break) > 0) {
             break;
         }
         if (c == '\\' && byte_at(s, pos + 1) == 'u' && byte_at(s, pos + 2) == '{') {
             // Escape in a name: \u{...}.
             size_t const close = str_find_char(str_slice(s, pos, s.len), '}');
-            pos = close == STR_NPOS ? s.len : pos + close + 1;
+            pos = pos + close + 1;
+            if (close == STR_NPOS) {
+                pos = s.len;
+            }
         } else {
-            pos += c == '\\' ? 2 : 1;
+            if (c == '\\') {
+                pos += 2;
+            } else {
+                pos += 1;
+            }
         }
     }
     token->kind = TOKEN_WORD;
@@ -451,7 +472,7 @@ static bool scan_punct(Lexer *lx, Token *token) {
     if (len == 2 && rest.data[0] == '?' && rest.data[1] == '.' && is_digit(byte_at(rest, 2))) {
         len = 1;
     }
-    unsigned char const c = byte_at(s, lx->pos);
+    byte const c = byte_at(s, lx->pos);
     if (c == '{') {
         if (!push_brace(lx, BRACE_BLOCK, lx->pos)) {
             return false;
@@ -487,7 +508,7 @@ static bool lex_next(Lexer *lx, Token *token) {
         }
         token->kind = TOKEN_END;
     } else {
-        unsigned char const c = byte_at(s, start);
+        byte const c = byte_at(s, start);
         if (c == '"' || c == '\'') {
             ok = scan_string(lx, token);
         } else if (c == '`') {
@@ -574,8 +595,8 @@ static bool can_start_statement(Token const *t) {
  * separate them.
  */
 static bool needs_space(Token const *a, Token const *b) {
-    unsigned char const last = (unsigned char)a->text.data[a->text.len - 1];
-    unsigned char const first = (unsigned char)b->text.data[0];
+    byte const last = (byte)a->text.data[a->text.len - 1];
+    byte const first = (byte)b->text.data[0];
     if (is_word_byte(last) && (is_word_byte(first) || first == '#')) {
         return true;  // Two names, a keyword and a name, or a regex's flags and a name.
     }

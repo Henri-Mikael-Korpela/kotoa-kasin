@@ -196,7 +196,11 @@ static bool read_sql(Str dir, Migration const *m, SQL_Text *sql) {
     }
 
     size_t size = (size_t)st.st_size;
-    char *bytes = sqlite3_malloc64(size > 0 ? size : 1);
+    size_t allocation_size = 1;
+    if (size > 0) {
+        allocation_size = size;
+    }
+    char *bytes = sqlite3_malloc64(allocation_size);
     size_t got = 0;
     while (bytes && got < size) {
         ssize_t r = read(fd, bytes + got, size - got);

@@ -9,7 +9,7 @@
 
 #include "geoip.h"
 
-static uint32_t read_u32_le(uint8_t const *p) {
+static uint32_t read_u32_le(byte const *p) {
     return (uint32_t)p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24;
 }
 
@@ -49,7 +49,7 @@ bool geoip_open(GeoIP *g, char const *path) {
         fprintf(stderr, "geoip: cannot map %s: %s\n", path, strerror(errno));
         return false;
     }
-    uint8_t const *bytes = map;
+    byte const *bytes = map;
     uint64_t const v4 = read_u32_le(bytes + GEOIP_MAGIC_SIZE);
     uint64_t const v6 = read_u32_le(bytes + GEOIP_MAGIC_SIZE + 4);
     uint64_t const expected = GEOIP_HEADER_SIZE + v4 * (4 + 2) + v6 * (16 + 2);
@@ -80,7 +80,7 @@ void geoip_close(GeoIP *g) {
 /**
  * The index of the last range that starts at or before key, or -1.
  */
-static int64_t find_range(uint8_t const *starts, uint32_t count, size_t width, uint8_t const *key) {
+static int64_t find_range(byte const *starts, uint32_t count, size_t width, byte const *key) {
     int64_t low = 0;
     int64_t high = (int64_t)count - 1;
     int64_t found = -1;
@@ -102,12 +102,20 @@ bool geoip_country(GeoIP const *g, IP_Address const *ip, char country[2]) {
         return false;
     }
     bool const v4 = ip_is_v4(ip);
-    int64_t const i = v4 ? find_range(g->v4_starts, g->v4_count, 4, ip->bytes + 12)
-                         : find_range(g->v6_starts, g->v6_count, 16, ip->bytes);
+    int64_t i = 0;
+    if (v4) {
+        i = find_range(g->v4_starts, g->v4_count, 4, ip->bytes + 12);
+    } else {
+        i = find_range(g->v6_starts, g->v6_count, 16, ip->bytes);
+    }
     if (i < 0) {
         return false;
     }
-    uint8_t const *code = (v4 ? g->v4_countries : g->v6_countries) + (size_t)i * 2;
+    byte const *countries = g->v6_countries;
+    if (v4) {
+        countries = g->v4_countries;
+    }
+    byte const *code = countries + (size_t)i * 2;
     bool const letters = code[0] >= 'A' && code[0] <= 'Z' && code[1] >= 'A' && code[1] <= 'Z';
     bool const unknown = code[0] == 'Z' && code[1] == 'Z';
     if (!letters || unknown) {

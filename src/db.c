@@ -34,12 +34,18 @@ static void *mem_realloc(void *ptr, int size) {
 }
 
 static int mem_size(void *ptr) {
-    return ptr ? (int)buddy_usable_size(ptr) : 0;
+    if (ptr) {
+        return (int)buddy_usable_size(ptr);
+    }
+    return 0;
 }
 
 static int mem_roundup(int size) {
     size_t rounded = buddy_round_up(&DB_HEAP, (size_t)size);
-    return rounded > 0 ? (int)rounded : size;  // Too big: let the allocation fail.
+    if (rounded > 0) {
+        return (int)rounded;
+    }
+    return size;  // Too big: let the allocation fail.
 }
 
 static int mem_init(void *app_data) {
@@ -88,7 +94,10 @@ bool db_global_init(void *heap_mem, size_t heap_size) {
  */
 static char const *vfs_for(DB_Storage storage) {
     // sqlite3_open_v2() takes a C string; NULL selects the default VFS.
-    return storage == DB_STORAGE_SHARE ? "unix-dotfile" : NULL;
+    if (storage == DB_STORAGE_SHARE) {
+        return "unix-dotfile";
+    }
+    return NULL;
 }
 
 static bool open_connection(sqlite3 **conn, Str path, DB_Storage storage) {
@@ -148,8 +157,10 @@ bool db_prepare_file(Str path, DB_Storage storage, Str migrations_dir) {
         return false;
     }
     // Table rebuilds in migrations need foreign keys off; checked once at the end.
-    Str journal_mode = storage == DB_STORAGE_LOCAL ? STR("PRAGMA journal_mode = WAL;")
-                                                    : STR("PRAGMA journal_mode = DELETE;");
+    Str journal_mode = STR("PRAGMA journal_mode = DELETE;");
+    if (storage == DB_STORAGE_LOCAL) {
+        journal_mode = STR("PRAGMA journal_mode = WAL;");
+    }
     bool ok = sql_exec(conn, journal_mode, STR("setting journal mode")) &&
               sql_exec(conn, STR("PRAGMA foreign_keys = OFF;"), STR("disabling foreign keys"));
 
@@ -463,7 +474,10 @@ static DB_Status status_from(int rc) {
  * does not exist is invalid input, as is any other failed constraint.
  */
 static DB_Status recipe_status_from(int rc) {
-    return rc == SQLITE_CONSTRAINT_UNIQUE ? DB_CONFLICT : status_from(rc);
+    if (rc == SQLITE_CONSTRAINT_UNIQUE) {
+        return DB_CONFLICT;
+    }
+    return status_from(rc);
 }
 
 static DB_Status category_status_from(int rc) {
@@ -487,7 +501,10 @@ static DB_Status check_json_object(DB *db, Str json) {
     int rc = sqlite3_step(db->is_json_object);
     DB_Status status = DB_ERROR;
     if (rc == SQLITE_ROW) {
-        status = sqlite3_column_int(db->is_json_object, 0) ? DB_OK : DB_INVALID;
+        status = DB_INVALID;
+        if (sqlite3_column_int(db->is_json_object, 0)) {
+            status = DB_OK;
+        }
     } else {
         status = status_from(rc);
     }
@@ -534,7 +551,11 @@ static DB_Status insert_from_json(DB *db, sqlite3_stmt *stmt, Str json, int64_t 
         *id = sqlite3_column_int64(stmt, 0);
         rc = sqlite3_step(stmt);  // Runs the statement to completion.
     }
-    status = rc == SQLITE_DONE ? DB_OK : map_error(rc);
+    if (rc == SQLITE_DONE) {
+        status = DB_OK;
+    } else {
+        status = map_error(rc);
+    }
     finish(stmt);
     return status;
 }
@@ -661,7 +682,10 @@ DB_Status db_create_image(DB *db, Str extension, Str original_name, int64_t size
         *id = sqlite3_column_int64(stmt, 0);
         rc = sqlite3_step(stmt);  // Runs the statement to completion.
     }
-    DB_Status status = rc == SQLITE_DONE ? DB_OK : status_from(rc);
+    DB_Status status = DB_OK;
+    if (rc != SQLITE_DONE) {
+        status = status_from(rc);
+    }
     finish(stmt);
     return status;
 }
@@ -748,11 +772,15 @@ static DB_Status record_login_steps(DB *db, DB_Login_Attempt const *attempt) {
     }
 
     sqlite3_stmt *insert = db->insert_login_attempt;
+    int succeeded = 0;
+    if (attempt->succeeded) {
+        succeeded = 1;
+    }
     if (sqlite3_bind_int64(insert, 1, client_id) != SQLITE_OK ||
         sqlite3_bind_int64(insert, 2, attempt->at) != SQLITE_OK ||
         !sql_bind_str(insert, 3, attempt->username) ||
         !sql_bind_str(insert, 4, attempt->user_agent) ||
-        sqlite3_bind_int(insert, 5, attempt->succeeded ? 1 : 0) != SQLITE_OK) {
+        sqlite3_bind_int(insert, 5, succeeded) != SQLITE_OK) {
         finish(insert);
         return DB_ERROR;
     }
@@ -768,7 +796,10 @@ static DB_Status record_login_steps(DB *db, DB_Login_Attempt const *attempt) {
         sqlite3_bind_int64(db->prune_login_clients, 1, cutoff);
         rc = run(db->prune_login_clients);
     }
-    return rc == SQLITE_DONE ? DB_OK : status_from(rc);
+    if (rc == SQLITE_DONE) {
+        return DB_OK;
+    }
+    return status_from(rc);
 }
 
 DB_Status db_record_login(DB *db, DB_Login_Attempt const *attempt) {
@@ -780,7 +811,10 @@ DB_Status db_record_login(DB *db, DB_Login_Attempt const *attempt) {
         return DB_OK;
     }
     sql_exec(db->conn, STR("ROLLBACK;"), STR("undoing a login record"));
-    return status == DB_OK ? DB_ERROR : status;
+    if (status == DB_OK) {
+        return DB_ERROR;
+    }
+    return status;
 }
 
 DB_Status db_login_report_json(DB *db, Str_Builder *out) {
@@ -796,11 +830,17 @@ DB_Status db_recent_login_failures(DB *db, int64_t since, DB_Failure_Callback ea
     int rc;
     while ((rc = sqlite3_step(stmt)) == SQLITE_ROW) {
         int64_t const failures = sqlite3_column_int64(stmt, 1);
-        uint32_t const count = failures > UINT32_MAX ? UINT32_MAX : (uint32_t)failures;
+        uint32_t count = (uint32_t)failures;
+        if (failures > UINT32_MAX) {
+            count = UINT32_MAX;
+        }
         each(context, sql_column_str(stmt, 0), count, sqlite3_column_int64(stmt, 2));
     }
     finish(stmt);
-    return rc == SQLITE_DONE ? DB_OK : status_from(rc);
+    if (rc == SQLITE_DONE) {
+        return DB_OK;
+    }
+    return status_from(rc);
 }
 
 DB_Status db_clear_login_client(DB *db, int64_t id, int64_t now, Str_Builder *ip) {
@@ -813,7 +853,11 @@ DB_Status db_clear_login_client(DB *db, int64_t id, int64_t now, Str_Builder *ip
     if (rc == SQLITE_ROW) {
         str_builder_append(ip, sql_column_str(stmt, 0));
         rc = sqlite3_step(stmt);  // Runs the statement to completion.
-        status = rc == SQLITE_DONE ? DB_OK : status_from(rc);
+        if (rc == SQLITE_DONE) {
+            status = DB_OK;
+        } else {
+            status = status_from(rc);
+        }
     } else if (rc == SQLITE_DONE) {
         status = DB_NOT_FOUND;
     } else {

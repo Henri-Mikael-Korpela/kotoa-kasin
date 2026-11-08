@@ -22,6 +22,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "byte.h"
+
 #include "sha256.h"
 #include "str.h"
 
@@ -40,8 +42,8 @@ enum {
 
 typedef struct {
     uint32_t iterations;
-    uint8_t  salt[PASSWORD_SALT_SIZE];
-    uint8_t  hash[SHA256_DIGEST_SIZE];
+    byte     salt[PASSWORD_SALT_SIZE];
+    byte     hash[SHA256_DIGEST_SIZE];
 } Password_Hash;
 
 /**
@@ -53,8 +55,8 @@ typedef struct {
  * @param iterations Number of iterations, at least 1.
  * @param out Receives the derived key.
  */
-void pbkdf2_sha256(Str password, uint8_t const *salt, size_t salt_len, uint32_t iterations,
-                   uint8_t out[SHA256_DIGEST_SIZE]);
+void pbkdf2_sha256(Str password, byte const *salt, size_t salt_len, uint32_t iterations,
+                   byte out[SHA256_DIGEST_SIZE]);
 
 /**
  * Hashes a password with a new random salt.

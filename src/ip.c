@@ -5,7 +5,7 @@
 #include "ip.h"
 
 // ::ffff:0:0/96, the prefix of IPv4-mapped addresses.
-static uint8_t const V4_MAPPED_PREFIX[12] = {
+static byte const V4_MAPPED_PREFIX[12] = {
     0,
     0,
     0,
@@ -20,7 +20,7 @@ static uint8_t const V4_MAPPED_PREFIX[12] = {
     0xff,
 };
 
-IP_Address ip_from_v4(uint8_t const bytes[4]) {
+IP_Address ip_from_v4(byte const bytes[4]) {
     IP_Address ip;
     memcpy(ip.bytes, V4_MAPPED_PREFIX, sizeof V4_MAPPED_PREFIX);
     memcpy(ip.bytes + 12, bytes, 4);
@@ -34,7 +34,7 @@ bool ip_parse(Str text, IP_Address *out) {
     if (!str_to_cstr(text, buf, sizeof buf)) {
         return false;
     }
-    uint8_t v4[4];
+    byte v4[4];
     if (inet_pton(AF_INET, buf, v4) == 1) {
         *out = ip_from_v4(v4);
         return true;
@@ -51,8 +51,14 @@ void ip_format(IP_Address const *ip, Str_Builder *out) {
 
     char buf[IP_TEXT_SIZE];
     bool const v4 = ip_is_v4(ip);
-    int const family = v4 ? AF_INET : AF_INET6;
-    void const *bytes = v4 ? ip->bytes + 12 : ip->bytes;
+    int family = AF_INET6;
+    if (v4) {
+        family = AF_INET;
+    }
+    void const *bytes = ip->bytes;
+    if (v4) {
+        bytes = ip->bytes + 12;
+    }
     if (inet_ntop(family, bytes, buf, sizeof buf) == NULL) {
         str_builder_append(out, STR("?"));
         return;
@@ -67,6 +73,9 @@ bool ip_eq(IP_Address const *a, IP_Address const *b) {
 bool ip_from_forwarded_for(Str header, IP_Address *out) {
     assert(out != NULL);
     size_t const comma = str_rfind_char(header, ',');
-    Str const last = comma == STR_NPOS ? header : str_slice(header, comma + 1, header.len);
+    Str last = str_slice(header, comma + 1, header.len);
+    if (comma == STR_NPOS) {
+        last = header;
+    }
     return ip_parse(str_trim(last), out);
 }

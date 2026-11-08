@@ -124,11 +124,11 @@ int main(void) {
     login_guard_init(&GUARD, now);
     int allowed = 0;
     for (int i = 0; i < 20; i++) {
-        uint8_t const bytes[4] = {
+        byte const bytes[4] = {
             192,
             0,
             2,
-            (uint8_t)i,
+            (byte)i,
         };
         IP_Address const ip = ip_from_v4(bytes);
         d = login_guard_check(&GUARD, &ip, now);
@@ -154,18 +154,23 @@ int main(void) {
     // A full table makes room by dropping the address whose last failure is oldest.
     login_guard_init(&GUARD, now);
     for (int i = 0; i < LOGIN_GUARD_SLOTS; i++) {
-        uint8_t const bytes[4] = {
+        byte const bytes[4] = {
             10,
-            (uint8_t)(i >> 16),
-            (uint8_t)(i >> 8),
-            (uint8_t)i,
+            (byte)(i >> 16),
+            (byte)(i >> 8),
+            (byte)i,
         };
         IP_Address const ip = ip_from_v4(bytes);
-        login_guard_failed(&GUARD, &ip, i == 0 ? now : now + 1);  // 10.0.0.0 is the oldest.
+        // 10.0.0.0 is the oldest.
+        int64_t at = now + 1;
+        if (i == 0) {
+            at = now;
+        }
+        login_guard_failed(&GUARD, &ip, at);
     }
     d = login_guard_failed(&GUARD, &attacker, now + 2);
     check("a new address finds room when full", d.failures == 1);
-    uint8_t const first[4] = {
+    byte const first[4] = {
         10,
         0,
         0,
@@ -174,7 +179,7 @@ int main(void) {
     IP_Address const oldest = ip_from_v4(first);
     d = login_guard_failed(&GUARD, &oldest, now + 3);
     check("the oldest was the one dropped", d.failures == 1);
-    uint8_t const later[4] = {
+    byte const later[4] = {
         10,
         0,
         0,
@@ -185,7 +190,7 @@ int main(void) {
     check("others kept their failures", d.failures == 2);
 
     if (FAILURES > 0) {
-        printf("%d failure%s\n", FAILURES, FAILURES == 1 ? "" : "s");
+        printf("%d failure(s)\n", FAILURES);
         return EXIT_FAILURE;
     }
     printf("all login guard tests passed\n");

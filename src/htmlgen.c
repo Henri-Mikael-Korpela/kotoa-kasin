@@ -150,7 +150,10 @@ static bool read_file(Arena *arena, char const *path, Str *contents) {
             continue;
         }
         if (n <= 0) {
-            char const *reason = n < 0 ? strerror(errno) : "file shrank while reading";
+            char const *reason = "file shrank while reading";
+            if (n < 0) {
+                reason = strerror(errno);
+            }
             fprintf(stderr, "%s: %s\n", path, reason);
             close(fd);
             return false;
@@ -378,7 +381,7 @@ static uint64_t watch_state(Arena *arena, Str templates_dir) {
                 continue;
             }
             for (size_t n = 0; n < list->paths[i].len; n++) {
-                hash = hash_mix(hash, (uint64_t)(unsigned char)list->paths[i].data[n]);
+                hash = hash_mix(hash, (uint64_t)(byte)list->paths[i].data[n]);
             }
             hash = hash_mix(hash, (uint64_t)st.st_mtim.tv_sec);
             hash = hash_mix(hash, (uint64_t)st.st_mtim.tv_nsec);
@@ -443,7 +446,7 @@ static int build_all(Arena *arena, Str templates_dir, Str out_dir, uint64_t *sta
  * Generates the pages again whenever the templates change; does not return.
  */
 static void watch(Arena *arena, Str templates_dir, Str out_dir) {
-    for (;;) {
+    while (true) {
         uint64_t state;
         int const status = build_all(arena, templates_dir, out_dir, &state);
         if (status == EXIT_SUCCESS) {
@@ -479,7 +482,10 @@ int main(int argc, char **argv) {
                 break;
             default:
                 usage();
-                return opt == 'h' ? EXIT_SUCCESS : EX_USAGE;
+                if (opt == 'h') {
+                    return EXIT_SUCCESS;
+                }
+                return EX_USAGE;
         }
     }
     if (out_dir == NULL || optind != argc - 1) {

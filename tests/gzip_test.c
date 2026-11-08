@@ -33,11 +33,12 @@ static unsigned const DISTANCE_BASE[30] = {
     193, 257, 385, 513, 769, 1025, 1537, 2049, 3073, 4097, 6145, 8193, 12289, 16385, 24577,
 };
 static unsigned const DISTANCE_EXTRA[30] = {
-    0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 9, 9, 10, 10, 11, 11, 12, 12, 13, 13,
+    0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 9, 9, 10, 10, 11, 11, 12, 12, 13,
+    13,
 };
 
 typedef struct {
-    uint8_t const *data;
+    byte const *data;
     size_t         size;
     size_t         bit;  // Index of the next bit.
     bool           failed;
@@ -92,7 +93,7 @@ static unsigned read_symbol(Bit_Reader *r) {
  *
  * @return The decoded length, or SIZE_MAX when the stream is not valid.
  */
-static size_t gunzip(uint8_t const *stream, size_t size, uint8_t *out, size_t capacity) {
+static size_t gunzip(byte const *stream, size_t size, byte *out, size_t capacity) {
     if (size < 18 || stream[0] != 0x1f || stream[1] != 0x8b || stream[2] != 8 || stream[3] != 0) {
         return SIZE_MAX;
     }
@@ -106,7 +107,7 @@ static size_t gunzip(uint8_t const *stream, size_t size, uint8_t *out, size_t ca
         return SIZE_MAX;
     }
     size_t len = 0;
-    for (;;) {
+    while (true) {
         unsigned const symbol = read_symbol(&r);
         if (r.failed || symbol == 0xffff) {
             return SIZE_MAX;
@@ -118,13 +119,14 @@ static size_t gunzip(uint8_t const *stream, size_t size, uint8_t *out, size_t ca
             if (len >= capacity) {
                 return SIZE_MAX;
             }
-            out[len++] = (uint8_t)symbol;
+            out[len++] = (byte)symbol;
             continue;
         }
         if (symbol > 285) {
             return SIZE_MAX;
         }
-        unsigned const length = LENGTH_BASE[symbol - 257] + read_bits(&r, LENGTH_EXTRA[symbol - 257]);
+        unsigned const length =
+            LENGTH_BASE[symbol - 257] + read_bits(&r, LENGTH_EXTRA[symbol - 257]);
         unsigned slot = 0;
         for (unsigned i = 0; i < 5; i++) {
             slot = (slot << 1) | read_bit(&r);
@@ -143,23 +145,26 @@ static size_t gunzip(uint8_t const *stream, size_t size, uint8_t *out, size_t ca
     }
     // Whole bytes only after the padding, then the trailer, whose length must match.
     size_t const used = (r.bit + 7) / 8;
-    uint8_t const *trailer = stream + 10 + used;
+    byte const *trailer = stream + 10 + used;
     if (10 + used + 8 != size) {
         return SIZE_MAX;
     }
     uint32_t const stored = (uint32_t)trailer[4] | ((uint32_t)trailer[5] << 8) |
                             ((uint32_t)trailer[6] << 16) | ((uint32_t)trailer[7] << 24);
-    return stored == len ? len : SIZE_MAX;
+    if (stored == len) {
+        return len;
+    }
+    return SIZE_MAX;
 }
 
-static uint32_t crc_in_trailer(uint8_t const *stream, size_t size) {
-    uint8_t const *t = stream + size - 8;
+static uint32_t crc_in_trailer(byte const *stream, size_t size) {
+    byte const *t = stream + size - 8;
     return (uint32_t)t[0] | ((uint32_t)t[1] << 8) | ((uint32_t)t[2] << 16) | ((uint32_t)t[3] << 24);
 }
 
-static void expect_round_trip(char const *label, uint8_t const *input, size_t len) {
-    static uint8_t packed[200000];
-    static uint8_t unpacked[200000];
+static void expect_round_trip(char const *label, byte const *input, size_t len) {
+    static byte packed[200000];
+    static byte unpacked[200000];
     size_t const packed_len = gzip_compress(str_make((char const *)input, len),
                                             packed,
                                             sizeof packed);
@@ -176,7 +181,7 @@ static void expect_round_trip(char const *label, uint8_t const *input, size_t le
 }
 
 static void expect_text_round_trip(char const *label, char const *text) {
-    expect_round_trip(label, (uint8_t const *)text, strlen(text));
+    expect_round_trip(label, (byte const *)text, strlen(text));
 }
 
 int main(void) {
@@ -189,24 +194,28 @@ int main(void) {
                            "<li><a href=\"/c\">C</a></li><li><a href=\"/d\">D</a></li>");
 
     // A long run is one byte followed by a match that overlaps itself, at the longest length.
-    static uint8_t run[5000];
+    static byte run[5000];
     memset(run, 'x', sizeof run);
     expect_round_trip("run", run, sizeof run);
 
     // Bytes that do not repeat: the stream is longer than the input, but still valid.
-    static uint8_t noise[20000];
+    static byte noise[20000];
     uint32_t state = 12345;
     for (size_t i = 0; i < sizeof noise; i++) {
         state = state * 1664525u + 1013904223u;
-        noise[i] = (uint8_t)(state >> 24);
+        noise[i] = (byte)(state >> 24);
     }
     expect_round_trip("noise", noise, sizeof noise);
 
     // Matches reach back as far as the window allows.
-    static uint8_t far[40000];
+    static byte far[40000];
     for (size_t i = 0; i < sizeof far; i++) {
         state = state * 1664525u + 1013904223u;
-        far[i] = (uint8_t)(i < 30000 ? state >> 24 : far[i - 30000]);
+        if (i < 30000) {
+            far[i] = (byte)(state >> 24);
+        } else {
+            far[i] = far[i - 30000];
+        }
     }
     expect_round_trip("far", far, sizeof far);
 
@@ -216,11 +225,12 @@ int main(void) {
     while (used + 80 < sizeof page) {
         used += (size_t)snprintf(page + used,
                                  sizeof page - used,
-                                 "<div class=\"card\"><a href=\"/reseptit/%zu\">Resepti %zu</a></div>\n",
+                                 "<div class=\"card\"><a href=\"/reseptit/%zu\">"
+                                 "Resepti %zu</a></div>\n",
                                  used % 7,
                                  used % 13);
     }
-    static uint8_t packed[GZIP_MAX_INPUT];
+    static byte packed[GZIP_MAX_INPUT];
     size_t const packed_len = gzip_compress(str_make(page, used), packed, sizeof packed);
     check("html shrinks", packed_len > 0 && packed_len < used / 3);
 
@@ -229,12 +239,17 @@ int main(void) {
     check("crc-32", crc_len > 0 && crc_in_trailer(packed, crc_len) == 0xcbf43926u);
 
     // Too small a buffer is refused, not overrun.
-    uint8_t small[32];
-    check("does not fit", gzip_compress(str_make((char const *)noise, 1000), small, sizeof small) == 0);
-    check("too long", gzip_compress(str_make(page, GZIP_MAX_INPUT + 1), packed, sizeof packed) == 0);
+    byte small[32];
+    check("does not fit",
+          gzip_compress(str_make((char const *)noise, 1000), small, sizeof small) == 0);
+    check("too long",
+          gzip_compress(str_make(page, GZIP_MAX_INPUT + 1), packed, sizeof packed) == 0);
 
     if (FAILURES == 0) {
         printf("all gzip tests passed\n");
     }
-    return FAILURES == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
+    if (FAILURES == 0) {
+        return EXIT_SUCCESS;
+    }
+    return EXIT_FAILURE;
 }

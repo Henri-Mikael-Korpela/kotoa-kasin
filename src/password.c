@@ -20,7 +20,7 @@ typedef struct {
 static void hmac_key_init(HMAC_Key *k, Str key) {
     assert(k != NULL);
 
-    uint8_t block[SHA256_BLOCK_SIZE];
+    byte block[SHA256_BLOCK_SIZE];
     memset(block, 0, sizeof block);
     if (key.len > SHA256_BLOCK_SIZE) {
         SHA256 ctx;
@@ -31,7 +31,7 @@ static void hmac_key_init(HMAC_Key *k, Str key) {
         memcpy(block, key.data, key.len);
     }
 
-    uint8_t pad[SHA256_BLOCK_SIZE];
+    byte pad[SHA256_BLOCK_SIZE];
     for (size_t i = 0; i < SHA256_BLOCK_SIZE; i++) {
         pad[i] = block[i] ^ 0x36;
     }
@@ -45,20 +45,20 @@ static void hmac_key_init(HMAC_Key *k, Str key) {
 }
 
 static void hmac_with_key(HMAC_Key const *k, void const *msg, size_t msg_len,
-                          uint8_t out[SHA256_DIGEST_SIZE]) {
+                          byte out[SHA256_DIGEST_SIZE]) {
     assert(out != NULL);
 
     SHA256 ctx = k->inner;
     sha256_update(&ctx, msg, msg_len);
-    uint8_t inner_hash[SHA256_DIGEST_SIZE];
+    byte inner_hash[SHA256_DIGEST_SIZE];
     sha256_final(&ctx, inner_hash);
     ctx = k->outer;
     sha256_update(&ctx, inner_hash, sizeof inner_hash);
     sha256_final(&ctx, out);
 }
 
-void pbkdf2_sha256(Str password, uint8_t const *salt, size_t salt_len, uint32_t iterations,
-                   uint8_t out[SHA256_DIGEST_SIZE]) {
+void pbkdf2_sha256(Str password, byte const *salt, size_t salt_len, uint32_t iterations,
+                   byte out[SHA256_DIGEST_SIZE]) {
     assert(salt != NULL);
     assert(out != NULL);
 
@@ -67,7 +67,7 @@ void pbkdf2_sha256(Str password, uint8_t const *salt, size_t salt_len, uint32_t 
 
     // The first block only: T1 = U1 ^ U2 ^ ... with U1 = HMAC(P, S || INT(1)).
     SHA256 first = key.inner;
-    uint8_t const block_index[4] = {
+    byte const block_index[4] = {
         0,
         0,
         0,
@@ -75,12 +75,12 @@ void pbkdf2_sha256(Str password, uint8_t const *salt, size_t salt_len, uint32_t 
     };
     sha256_update(&first, salt, salt_len);
     sha256_update(&first, block_index, sizeof block_index);
-    uint8_t inner_hash[SHA256_DIGEST_SIZE];
+    byte inner_hash[SHA256_DIGEST_SIZE];
     sha256_final(&first, inner_hash);
     SHA256 outer = key.outer;
     sha256_update(&outer, inner_hash, sizeof inner_hash);
 
-    uint8_t u[SHA256_DIGEST_SIZE];
+    byte u[SHA256_DIGEST_SIZE];
     sha256_final(&outer, u);
     memcpy(out, u, sizeof u);
     for (uint32_t i = 1; i < iterations; i++) {
@@ -114,7 +114,7 @@ static int hex_value(char c) {
     return -1;
 }
 
-static bool parse_hex(Str text, uint8_t *out, size_t size) {
+static bool parse_hex(Str text, byte *out, size_t size) {
     assert(out != NULL);
     if (text.len != size * 2) {
         return false;
@@ -125,12 +125,12 @@ static bool parse_hex(Str text, uint8_t *out, size_t size) {
         if (high < 0 || low < 0) {
             return false;
         }
-        out[i] = (uint8_t)(high << 4 | low);
+        out[i] = (byte)(high << 4 | low);
     }
     return true;
 }
 
-static void append_hex(Str_Builder *out, uint8_t const *bytes, size_t size) {
+static void append_hex(Str_Builder *out, byte const *bytes, size_t size) {
     assert(out != NULL);
     for (size_t i = 0; i < size; i++) {
         str_builder_append_char(out, HEX_DIGITS.data[bytes[i] >> 4]);
@@ -176,7 +176,7 @@ bool password_hash_format(Password_Hash const *hash, Str_Builder *out) {
 }
 
 bool password_verify(Str password, Password_Hash const *hash) {
-    uint8_t derived[SHA256_DIGEST_SIZE];
+    byte derived[SHA256_DIGEST_SIZE];
     pbkdf2_sha256(password, hash->salt, sizeof hash->salt, hash->iterations, derived);
     return str_eq_constant_time(str_make((char const *)derived, sizeof derived),
                                 str_make((char const *)hash->hash, sizeof hash->hash));

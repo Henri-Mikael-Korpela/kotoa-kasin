@@ -18,7 +18,7 @@ static uint32_t rotr(uint32_t x, uint32_t n) {
     return (x >> n) | (x << (32 - n));
 }
 
-static void compress(uint32_t state[8], uint8_t const block[SHA256_BLOCK_SIZE]) {
+static void compress(uint32_t state[8], byte const block[SHA256_BLOCK_SIZE]) {
     assert(state != NULL);
     uint32_t w[64];
     for (size_t i = 0; i < 16; i++) {
@@ -76,7 +76,7 @@ void sha256_init(SHA256 *ctx) {
 }
 
 void sha256_update(SHA256 *ctx, void const *data, size_t len) {
-    uint8_t const *p = data;
+    byte const *p = data;
     ctx->total_len += len;
     while (len > 0) {
         size_t take = SHA256_BLOCK_SIZE - ctx->block_len;
@@ -94,32 +94,32 @@ void sha256_update(SHA256 *ctx, void const *data, size_t len) {
     }
 }
 
-void sha256_final(SHA256 *ctx, uint8_t out[SHA256_DIGEST_SIZE]) {
+void sha256_final(SHA256 *ctx, byte out[SHA256_DIGEST_SIZE]) {
     assert(out != NULL);
     uint64_t bit_len = ctx->total_len * 8;
-    uint8_t pad = 0x80;
+    byte pad = 0x80;
     sha256_update(ctx, &pad, 1);
-    uint8_t zero = 0;
+    byte zero = 0;
     while (ctx->block_len != SHA256_BLOCK_SIZE - 8) {
         sha256_update(ctx, &zero, 1);
     }
-    uint8_t len_be[8];
+    byte len_be[8];
     for (size_t i = 0; i < 8; i++) {
-        len_be[i] = (uint8_t)(bit_len >> (56 - 8 * i));
+        len_be[i] = (byte)(bit_len >> (56 - 8 * i));
     }
     sha256_update(ctx, len_be, sizeof len_be);
     for (size_t i = 0; i < 8; i++) {
-        out[i * 4] = (uint8_t)(ctx->state[i] >> 24);
-        out[i * 4 + 1] = (uint8_t)(ctx->state[i] >> 16);
-        out[i * 4 + 2] = (uint8_t)(ctx->state[i] >> 8);
-        out[i * 4 + 3] = (uint8_t)ctx->state[i];
+        out[i * 4] = (byte)(ctx->state[i] >> 24);
+        out[i * 4 + 1] = (byte)(ctx->state[i] >> 16);
+        out[i * 4 + 2] = (byte)(ctx->state[i] >> 8);
+        out[i * 4 + 3] = (byte)ctx->state[i];
     }
 }
 
 void hmac_sha256(void const *key, size_t key_len, void const *msg, size_t msg_len,
-                 uint8_t out[SHA256_DIGEST_SIZE]) {
+                 byte out[SHA256_DIGEST_SIZE]) {
     assert(out != NULL);
-    uint8_t key_block[SHA256_BLOCK_SIZE] = {
+    byte key_block[SHA256_BLOCK_SIZE] = {
         0,
     };
     if (key_len > SHA256_BLOCK_SIZE) {
@@ -131,8 +131,8 @@ void hmac_sha256(void const *key, size_t key_len, void const *msg, size_t msg_le
         memcpy(key_block, key, key_len);
     }
 
-    uint8_t pad[SHA256_BLOCK_SIZE];
-    uint8_t inner_digest[SHA256_DIGEST_SIZE];
+    byte pad[SHA256_BLOCK_SIZE];
+    byte inner_digest[SHA256_DIGEST_SIZE];
     SHA256 ctx;
 
     for (size_t i = 0; i < SHA256_BLOCK_SIZE; i++) {

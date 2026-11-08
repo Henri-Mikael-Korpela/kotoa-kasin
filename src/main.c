@@ -22,7 +22,6 @@
  * headers and small built-in bodies use the response buffer.
  */
 
-#define _GNU_SOURCE
 #include <assert.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -150,13 +149,13 @@ typedef struct Conn {
     int64_t       last_active;  /**< Monotonic seconds. */
     IP_Address    peer;  /**< The address the connection comes from. */
     struct Conn  *next_free;
-    uint8_t      *req;  /**< REQ_BUF_SIZE bytes, lives in the arena. */
-    uint8_t      *resp;  /**< RESP_BUF_SIZE bytes, lives in the arena. */
-    uint8_t      *in;  /**< Request bytes: req, or big while a large body arrives. */
+    byte         *req;  /**< REQ_BUF_SIZE bytes, lives in the arena. */
+    byte         *resp;  /**< RESP_BUF_SIZE bytes, lives in the arena. */
+    byte         *in;  /**< Request bytes: req, or big while a large body arrives. */
     uint32_t      in_cap;
-    uint8_t      *out;  /**< Response bytes: resp, or big for a large response. */
+    byte         *out;  /**< Response bytes: resp, or big for a large response. */
     uint32_t      out_cap;
-    uint8_t      *big;  /**< Large buffer borrowed from the worker, or NULL. */
+    byte         *big;  /**< Large buffer borrowed from the worker, or NULL. */
 } Conn;
 
 typedef struct Worker {
@@ -168,7 +167,7 @@ typedef struct Worker {
     Conn               *free_list;
     struct epoll_event *events;
     DB                  db;  /**< This worker's own database connection. */
-    uint8_t            *big_free[BIG_BUFS_PER_WORKER];  /**< Large buffers not lent out. */
+    byte               *big_free[BIG_BUFS_PER_WORKER];  /**< Large buffers not lent out. */
     int                 big_free_count;
 } Worker;
 
@@ -176,7 +175,7 @@ static volatile sig_atomic_t STOP_REQUESTED = 0;
 static int ROOT_FD = -1;  // Directory static files are served from.
 static int UPLOADS_FD = -1;  // Directory uploaded images are stored in.
 static bool UPLOADS_ON_SHARE = false;  // True when the storage is a network share (Azure Files).
-static uint8_t JWT_KEY[SHA256_DIGEST_SIZE];  // Signs session tokens.
+static byte JWT_KEY[SHA256_DIGEST_SIZE];  // Signs session tokens.
 
 static Str const ADMIN_USERNAME = STR_INIT("hanna");
 
@@ -473,7 +472,11 @@ static void write_head(Str_Builder *b, Conn const *c, Reply const *reply,
     str_builder_append(b, STR("\r\nContent-Length: "));
     str_builder_append_u64(b, content_length);
     str_builder_append(b, STR("\r\nConnection: "));
-    str_builder_append(b, c->keepalive ? STR("keep-alive") : STR("close"));
+    if (c->keepalive) {
+        str_builder_append(b, STR("keep-alive"));
+    } else {
+        str_builder_append(b, STR("close"));
+    }
     str_builder_append(b, STR("\r\n"));
     str_builder_append(b, SECURITY_HEADERS);
     str_builder_append(b, reply->csp);
@@ -500,7 +503,10 @@ static void respond_error(Conn *c, int status, bool head_only) {
     str_builder_append(&body, STR(" "));
     str_builder_append(&body, status_reason(status));
     str_builder_append(&body, STR("\n"));
-    Str extra = status == 405 ? STR("Allow: GET, HEAD\r\n") : STR("");
+    Str extra = STR("");
+    if (status == 405) {
+        extra = STR("Allow: GET, HEAD\r\n");
+    }
     Reply const reply = make_reply(status, STR("text/plain; charset=utf-8"), head_only, extra);
     respond_simple(c, &reply, str_builder_str(&body));
 }
@@ -533,7 +539,10 @@ static void respond_in_place(Conn *c, Reply const *reply, Str_Builder const *bod
     }
     c->resp_pos = HEAD_RESERVE - (uint32_t)head.len;
     memcpy(c->out + c->resp_pos, head.data, head.len);
-    c->resp_end = HEAD_RESERVE + (reply->head_only ? 0 : (uint32_t)body->len);
+    c->resp_end = HEAD_RESERVE;
+    if (reply->head_only == false) {
+        c->resp_end += (uint32_t)body->len;
+    }
 }
 
 static void respond_json(Conn *c, int status, Str_Builder const *body, bool head_only,
@@ -733,7 +742,7 @@ static void append_page_with_nonce(Str_Builder *out, Str page, Str nonce) {
  */
 static bool make_nonce(Str_Builder *nonce) {
     assert(nonce != NULL);
-    unsigned char random[NONCE_RANDOM_SIZE];
+    byte random[NONCE_RANDOM_SIZE];
     if (getrandom(random, sizeof random, 0) != (ssize_t)sizeof random) {
         return false;
     }
@@ -755,7 +764,10 @@ static void send_public_page(Conn *c, int status, Str mime, bool head_only, bool
                              struct stat const *st) {
     char page_buf[MAX_PUBLIC_PAGE_SIZE];
     bool const fits = S_ISREG(st->st_mode) && st->st_size <= (off_t)sizeof page_buf;
-    ssize_t const got = fits ? read(fd, page_buf, (size_t)st->st_size) : -1;
+    ssize_t got = -1;
+    if (fits) {
+        got = read(fd, page_buf, (size_t)st->st_size);
+    }
     close(fd);
     char nonce_buf[NONCE_RANDOM_SIZE * 2];
     Str_Builder nonce;
@@ -783,7 +795,7 @@ static void send_public_page(Conn *c, int status, Str mime, bool head_only, bool
     Str extra_headers = STR("Cache-Control: no-cache\r\nVary: Accept-Encoding\r\n");
     if (gzip && !body.overflow) {
         // The page was copied into the body, so its buffer can take the compressed form.
-        size_t const packed_len = gzip_compress(str_builder_str(&body), (uint8_t *)page_buf,
+        size_t const packed_len = gzip_compress(str_builder_str(&body), (byte *)page_buf,
                                                 sizeof page_buf);
         if (packed_len > 0 && packed_len < body.len) {
             memcpy(body.data, page_buf, packed_len);
@@ -813,7 +825,10 @@ static void serve_file(Conn *c, int status, Str rel_path, bool head_only, bool i
     struct stat st;
     int fd = open_in_root(str_builder_str(&path), &st);
     size_t slash = str_rfind_char(rel_path, '/');
-    Str last_segment = slash == STR_NPOS ? rel_path : str_slice(rel_path, slash + 1, rel_path.len);
+    Str last_segment = str_slice(rel_path, slash + 1, rel_path.len);
+    if (slash == STR_NPOS) {
+        last_segment = rel_path;
+    }
     if (fd >= 0 && S_ISDIR(st.st_mode)) {
         close(fd);
         str_builder_append(&path, STR("/index.html"));
@@ -830,7 +845,11 @@ static void serve_file(Conn *c, int status, Str rel_path, bool head_only, bool i
             respond_simple(c, &welcome, WELCOME);
         } else {
             bool not_found = path.overflow || errno == ENOENT || errno == ENOTDIR;
-            respond_error(c, not_found ? 404 : 500, head_only);
+            int error_status = 500;
+            if (not_found) {
+                error_status = 404;
+            }
+            respond_error(c, error_status, head_only);
         }
         return;
     }
@@ -855,7 +874,10 @@ static void serve_upload(Conn *c, Str file_name, bool head_only) {
     bool valid = str_split_once(file_name, STR("."), &number, &extension) &&
                  str_to_u64(number, &id) && str_find_char(extension, '.') == STR_NPOS &&
                  str_to_cstr(file_name, name_z, sizeof name_z);
-    int fd = valid && UPLOADS_FD >= 0 ? open_beneath(UPLOADS_FD, name_z) : -1;
+    int fd = -1;
+    if (valid && UPLOADS_FD >= 0) {
+        fd = open_beneath(UPLOADS_FD, name_z);
+    }
     struct stat st;
     if (fd < 0 || fstat(fd, &st) < 0 || !S_ISREG(st.st_mode)) {
         if (fd >= 0) {
@@ -1033,9 +1055,10 @@ static void describe_client(IP_Address const *address, Login_Client *client) {
     str_builder_init(&ip, client->ip_buf, sizeof client->ip_buf);
     ip_format(address, &ip);
     client->ip = str_builder_str(&ip);
-    client->country = geoip_country(&GEOIP, address, client->country_buf)
-                      ? str_make(client->country_buf, 2)
-                      : STR("");
+    client->country = STR("");
+    if (geoip_country(&GEOIP, address, client->country_buf)) {
+        client->country = str_make(client->country_buf, 2);
+    }
 }
 
 /**
@@ -1045,13 +1068,19 @@ static void describe_client(IP_Address const *address, Login_Client *client) {
  */
 static Str clean_text(Str text, char *buf, size_t capacity, bool ascii_only) {
     assert(buf != NULL);
-    size_t len = text.len < capacity ? text.len : capacity;
-    while (len > 0 && len < text.len && ((unsigned char)text.data[len] & 0xC0) == 0x80) {
+    size_t len = capacity;
+    if (text.len < capacity) {
+        len = text.len;
+    }
+    while (len > 0 && len < text.len && ((byte)text.data[len] & 0xC0) == 0x80) {
         len--;  // Do not split a UTF-8 character.
     }
     for (size_t i = 0; i < len; i++) {
-        unsigned char const b = (unsigned char)text.data[i];
-        buf[i] = b < 0x20 || b == 0x7F || (ascii_only && b >= 0x80) ? '?' : (char)b;
+        byte const b = (byte)text.data[i];
+        buf[i] = (char)b;
+        if (b < 0x20 || b == 0x7F || (ascii_only && b >= 0x80)) {
+            buf[i] = '?';
+        }
     }
     return str_make(buf, len);
 }
@@ -1071,7 +1100,11 @@ static void append_quoted(Str_Builder *out, Str text) {
 static void append_client(Str_Builder *out, Login_Client const *client) {
     str_builder_append(out, client->ip);
     str_builder_append(out, STR(" ("));
-    str_builder_append(out, client->country.len > 0 ? client->country : STR("country unknown"));
+    if (client->country.len > 0) {
+        str_builder_append(out, client->country);
+    } else {
+        str_builder_append(out, STR("country unknown"));
+    }
     str_builder_append(out, STR(")"));
 }
 
@@ -1089,8 +1122,10 @@ static void log_login_refused(Login_Client const *client, Login_Decision const *
     if (d->verdict == LOGIN_BUSY) {
         str_builder_append(&line, STR(": too many logins from all addresses in the last minute"));
     } else {
-        Str const phrase = d->verdict == LOGIN_BANNED ? STR(": banned after ")
-                                                      : STR(": must wait after ");
+        Str phrase = STR(": must wait after ");
+        if (d->verdict == LOGIN_BANNED) {
+            phrase = STR(": banned after ");
+        }
         str_builder_append(&line, phrase);
         str_builder_append_u64(&line, d->failures);
         str_builder_append(&line, STR(" failures"));
@@ -1108,14 +1143,21 @@ static void log_login_checked(Login_Client const *client, Str username, bool suc
     char buf[512];
     Str_Builder line;
     str_builder_init(&line, buf, sizeof buf);
-    str_builder_append(&line, succeeded ? STR("login: success for ") : STR("login: FAILED for "));
+    if (succeeded) {
+        str_builder_append(&line, STR("login: success for "));
+    } else {
+        str_builder_append(&line, STR("login: FAILED for "));
+    }
     append_quoted(&line, username);
     str_builder_append(&line, STR(" from "));
     append_client(&line, client);
     if (!succeeded) {
         str_builder_append(&line, STR("; "));
         str_builder_append_u64(&line, after->failures);
-        Str const noun = after->failures == 1 ? STR(" recent failure") : STR(" recent failures");
+        Str noun = STR(" recent failures");
+        if (after->failures == 1) {
+            noun = STR(" recent failure");
+        }
         str_builder_append(&line, noun);
         if (after->verdict == LOGIN_BANNED) {
             str_builder_append(&line, STR(", now banned for "));
@@ -1141,14 +1183,19 @@ static void respond_login_refused(Conn *c, Login_Decision const *d) {
     Str_Builder body;
     body_begin(c, &body);
     str_builder_append(&body, STR("{\"error\":\""));
-    Str const message = d->verdict == LOGIN_BUSY
-                        ? STR("too many login attempts right now")
-                        : STR("too many failed logins from this address");
+    Str message = STR("too many failed logins from this address");
+    if (d->verdict == LOGIN_BUSY) {
+        message = STR("too many login attempts right now");
+    }
     str_builder_append(&body, message);
     str_builder_append(&body, STR("\",\"reason\":\""));
-    str_builder_append(&body, d->verdict == LOGIN_BUSY     ? STR("busy")
-                              : d->verdict == LOGIN_BANNED ? STR("banned")
-                                                           : STR("delayed"));
+    Str reason = STR("delayed");
+    if (d->verdict == LOGIN_BUSY) {
+        reason = STR("busy");
+    } else if (d->verdict == LOGIN_BANNED) {
+        reason = STR("banned");
+    }
+    str_builder_append(&body, reason);
     str_builder_append(&body, STR("\",\"retry_after\":"));
     str_builder_append_u64(&body, (uint64_t)d->retry_after);
     str_builder_append(&body, STR("}"));
@@ -1313,14 +1360,20 @@ static DB_Status build_login_report(Worker *w, int64_t now, Str_Builder *body) {
     for (size_t i = 0; i < count; i++) {
         Login_Client client;
         describe_client(&blocks[i].ip, &client);
-        str_builder_append(body, i == 0 ? STR("{\"ip\":\"") : STR(",{\"ip\":\""));
+        if (i == 0) {
+            str_builder_append(body, STR("{\"ip\":\""));
+        } else {
+            str_builder_append(body, STR(",{\"ip\":\""));
+        }
         str_builder_append(body, client.ip);
         str_builder_append(body, STR("\",\"failures\":"));
         str_builder_append_u64(body, blocks[i].failures);
         str_builder_append(body, STR(",\"until\":"));
         str_builder_append_u64(body, (uint64_t)blocks[i].until);
-        Str const banned = blocks[i].banned ? STR(",\"banned\":true}")
-                                            : STR(",\"banned\":false}");
+        Str banned = STR(",\"banned\":false}");
+        if (blocks[i].banned) {
+            banned = STR(",\"banned\":true}");
+        }
         str_builder_append(body, banned);
     }
     str_builder_append(body, STR("],\"report\":"));
@@ -1329,7 +1382,10 @@ static DB_Status build_login_report(Worker *w, int64_t now, Str_Builder *body) {
         return status;
     }
     str_builder_append(body, STR("}"));
-    return body->overflow ? DB_TOO_LARGE : DB_OK;
+    if (body->overflow) {
+        return DB_TOO_LARGE;
+    }
+    return DB_OK;
 }
 
 // GET /api/login-attempts (auth): the admin's "Kirjautumiset" view.
@@ -1526,7 +1582,7 @@ static Str clean_original_name(Str name) {
         return STR("");
     }
     for (size_t i = 0; i < name.len; i++) {
-        if ((unsigned char)name.data[i] < 0x21 || (unsigned char)name.data[i] > 0x7E) {
+        if ((byte)name.data[i] < 0x21 || (byte)name.data[i] > 0x7E) {
             return STR("");
         }
     }
@@ -1609,7 +1665,11 @@ static void api_storage(Conn *c, Request const *r) {
         str_builder_append(&body, STR("{\"kind\":null,\"total\":null,\"available\":null}"));
     } else {
         str_builder_append(&body, STR("{\"kind\":\""));
-        str_builder_append(&body, UPLOADS_ON_SHARE ? STR("share") : STR("disk"));
+        if (UPLOADS_ON_SHARE) {
+            str_builder_append(&body, STR("share"));
+        } else {
+            str_builder_append(&body, STR("disk"));
+        }
         str_builder_append(&body, STR("\",\"total\":"));
         str_builder_append_u64(&body, space.total);
         str_builder_append(&body, STR(",\"available\":"));
@@ -1950,7 +2010,7 @@ static size_t take_large_body(Worker *w, Conn *c, Request_Headers const *h, size
  */
 static bool is_header_safe(Str s) {
     for (size_t i = 0; i < s.len; i++) {
-        unsigned char const ch = (unsigned char)s.data[i];
+        byte const ch = (byte)s.data[i];
         if (ch <= ' ' || ch >= 127) {
             return false;
         }
@@ -2039,7 +2099,11 @@ static void route_request(Worker *w, Conn *c, Request const *r) {
             db_recipe_slug_exists(&w->db, slug, &exists) != DB_OK) {
             exists = true;  // The page reports any database trouble itself.
         }
-        serve_file(c, exists ? 200 : 404, STR("resepti.html"), r->head_only, false,
+        int status = 404;
+        if (exists) {
+            status = 200;
+        }
+        serve_file(c, status, STR("resepti.html"), r->head_only, false,
                    r->headers->accepts_gzip);
         return;
     }
@@ -2102,7 +2166,10 @@ static Request_Headers request_headers_empty(void) {
  */
 static Str path_of_target(Str target) {
     size_t const end = str_find_any(target, STR("?#"));
-    return end == STR_NPOS ? target : str_slice(target, 0, end);
+    if (end == STR_NPOS) {
+        return target;
+    }
+    return str_slice(target, 0, end);
 }
 
 static size_t handle_request(Worker *w, Conn *c, Str head, size_t head_len) {
@@ -2146,7 +2213,11 @@ static size_t handle_request(Worker *w, Conn *c, Str head, size_t head_len) {
         return 0;  // Wait for the rest of the body.
     }
     // After a large body the connection closes, so the large buffer is free at once.
-    c->keepalive = (http11 ? !h.close : h.keepalive) && c->in != c->big;
+    bool wants_keepalive = h.keepalive;
+    if (http11) {
+        wants_keepalive = !h.close;
+    }
+    c->keepalive = wants_keepalive && c->in != c->big;
 
     Request r = {
         .method = method,
@@ -2288,7 +2359,7 @@ static bool send_file_body(Worker *w, Conn *c) {
  */
 static void conn_advance(Worker *w, Conn *c) {
     // Each pass answers one request and the input is finite, so the loop ends with it.
-    for (;;) {
+    while (true) {
         if (c->state == ST_READING) {
             if (!build_response(w, c)) {
                 if (c->req_len >= c->in_cap) {  // Headers too large.
@@ -2377,7 +2448,7 @@ static void accept_all(Worker *w, int64_t now) {
         c->big = NULL;
         c->file_pos = c->file_end = 0;
         c->last_active = now;
-        c->peer = ip_from_v4((uint8_t const *)&peer.sin_addr.s_addr);
+        c->peer = ip_from_v4((byte const *)&peer.sin_addr.s_addr);
         c->events = EPOLLIN;
 
         struct epoll_event ev = {
@@ -2718,15 +2789,15 @@ static int create_worker(Arena *arena, Settings const *settings, int id, Worker 
     size_t const response_bytes = (size_t)MAX_CONNS_PER_WORKER * RESP_BUF_SIZE;
     w->events = arena_alloc(arena, sizeof (struct epoll_event) * EVENT_BATCH, CACHE_LINE);
     w->conns = arena_alloc(arena, sizeof (Conn) * MAX_CONNS_PER_WORKER, CACHE_LINE);
-    uint8_t *reqs = arena_alloc(arena, request_bytes, CACHE_LINE);
-    uint8_t *resps = arena_alloc(arena, response_bytes, CACHE_LINE);
+    byte *reqs = arena_alloc(arena, request_bytes, CACHE_LINE);
+    byte *resps = arena_alloc(arena, response_bytes, CACHE_LINE);
     if (!w->events || !w->conns || !reqs || !resps) {
         fputs("arena exhausted\n", stderr);
         return EX_SOFTWARE;
     }
     w->big_free_count = 0;
     for (int j = 0; j < BIG_BUFS_PER_WORKER; j++) {
-        uint8_t *big = arena_alloc(arena, BIG_BUF_SIZE, CACHE_LINE);
+        byte *big = arena_alloc(arena, BIG_BUF_SIZE, CACHE_LINE);
         if (!big) {
             fputs("arena exhausted\n", stderr);
             return EX_SOFTWARE;
@@ -2777,8 +2848,11 @@ static void restore_login_state(Worker *w) {
                                  &restored) != DB_OK) {
         fprintf(stderr, "warning: could not read recent failed logins from the database\n");
     } else if (restored > 0) {
-        fprintf(stderr, "login: restored recent failures of %zu address%s\n", restored,
-                restored == 1 ? "" : "es");
+        char const *plural = "es";
+        if (restored == 1) {
+            plural = "";
+        }
+        fprintf(stderr, "login: restored recent failures of %zu address%s\n", restored, plural);
     }
 }
 
@@ -2794,15 +2868,23 @@ static void install_signal_handlers(void) {
 }
 
 static void print_banner(Settings const *settings, size_t reserved) {
+    Str root_shown = STR("(none)");
+    if (settings->root.len > 0) {
+        root_shown = settings->root;
+    }
+    char const *client_address_source = "the connection";
+    if (TRUST_PROXY) {
+        client_address_source = "X-Forwarded-For";
+    }
     printf("kasin-httpd: port %d, %ld workers, %d conns/worker, req %d B, resp %d B, "
            "reserved %.1f MiB (SQLite heap %d MiB, %d x %d KiB large buffers per worker), "
            "docroot %.*s, database %.*s, uploads %.*s, client address from %s\n",
            settings->port, settings->workers, MAX_CONNS_PER_WORKER, REQ_BUF_SIZE, RESP_BUF_SIZE,
            (double)reserved / (1024.0 * 1024.0), DB_HEAP_SIZE / (1024 * 1024),
            BIG_BUFS_PER_WORKER, BIG_BUF_SIZE / 1024,
-           STR_ARG(settings->root.len > 0 ? settings->root : STR("(none)")),
+           STR_ARG(root_shown),
            STR_ARG(settings->db_path), STR_ARG(settings->uploads_dir),
-           TRUST_PROXY ? "X-Forwarded-For" : "the connection");
+           client_address_source);
     fflush(stdout);
 }
 

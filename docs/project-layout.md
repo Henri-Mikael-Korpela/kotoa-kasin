@@ -17,4 +17,4 @@
 | `deploy/` | `bin/deploy` (the deployment script), `config.env` (its settings), `config.local.env` (your subscription and tenant; not in version control) and `secrets.env` (the live admin password hash; not in version control) |
 | `.github/workflows/ci.yml`, `.clang-tidy` | The GitHub Actions checks and the static analysis rules (see [Continuous integration](continuous-integration.md)) |
 | `docs/` | This documentation; the index is `README.md` |
-| `CLAUDE.md` | C and JavaScript code style rules for this project |
+| `CLAUDE.md` | Pointer to the C style guide and the JavaScript code style rules for this project |

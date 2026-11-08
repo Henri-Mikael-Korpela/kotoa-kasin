@@ -66,9 +66,16 @@ static void expect_check(char const *input, size_t line, char const *message) {
         return;
     }
     if (ok || error.line != line || !str_eq(error.message, str_from_cstr(message))) {
+        char const *outcome = "error";
+        size_t error_line = error.line;
+        Str error_message = error.message;
+        if (ok) {
+            outcome = "success,";
+            error_line = 0;
+            error_message = STR("");
+        }
         printf("FAIL check %s\n  got  %s line %zu: %.*s\n  want line %zu: %s\n", input,
-               ok ? "success," : "error", ok ? 0 : error.line,
-               STR_ARG(ok ? STR("") : error.message), line, message);
+               outcome, error_line, STR_ARG(error_message), line, message);
         FAILURES++;
     }
 }
@@ -141,7 +148,7 @@ int main(void) {
     expect_check("a { b: c", 1, "unclosed {");
 
     if (FAILURES > 0) {
-        printf("%d failure%s\n", FAILURES, FAILURES == 1 ? "" : "s");
+        printf("%d failure(s)\n", FAILURES);
         return EXIT_FAILURE;
     }
     printf("all cssmin tests passed\n");

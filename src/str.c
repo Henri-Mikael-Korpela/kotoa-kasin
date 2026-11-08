@@ -1,6 +1,7 @@
 #include <assert.h>
 #include <string.h>
 
+#include "byte.h"
 #include "str.h"
 
 static char ascii_lower(char c) {
@@ -70,9 +71,9 @@ bool str_eq_constant_time(Str a, Str b) {
     if (a.len != b.len) {
         return false;
     }
-    unsigned char diff = 0;
+    byte diff = 0;
     for (size_t i = 0; i < a.len; i++) {
-        diff |= (unsigned char)(a.data[i] ^ b.data[i]);
+        diff |= (byte)(a.data[i] ^ b.data[i]);
     }
     return diff == 0;
 }
@@ -86,7 +87,10 @@ size_t str_find_char(Str s, char c) {
         return STR_NPOS;
     }
     char const *hit = memchr(s.data, c, s.len);
-    return hit ? (size_t)(hit - s.data) : STR_NPOS;
+    if (hit) {
+        return (size_t)(hit - s.data);
+    }
+    return STR_NPOS;
 }
 
 size_t str_rfind_char(Str s, char c) {

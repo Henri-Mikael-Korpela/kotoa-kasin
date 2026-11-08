@@ -136,7 +136,11 @@ static bool is_emitting(Renderer const *r) {
         return true;
     }
     Branch const *branch = &r->branches[r->branch_count - 1];
-    return branch->parent_emitting && (branch->in_else ? !branch->condition : branch->condition);
+    bool active = branch->condition;
+    if (branch->in_else) {
+        active = !branch->condition;
+    }
+    return branch->parent_emitting && active;
 }
 
 static Variable *find_variable(Renderer *r, Str name) {
@@ -211,10 +215,11 @@ static bool split_words(Str tag, Word *words, size_t *count, Str *problem) {
 static bool run_set(Renderer *r, Frame const *frame, size_t offset, Word const *words,
                     size_t count, bool only_if_unset) {
     if (count != 3 || words[1].quoted || !words[2].quoted) {
-        return fail(r, frame, offset,
-                    only_if_unset ? STR("expected {{default name \"value\"}}")
-                                  : STR("expected {{set name \"value\"}}"),
-                    STR(""));
+        Str message = STR("expected {{set name \"value\"}}");
+        if (only_if_unset) {
+            message = STR("expected {{default name \"value\"}}");
+        }
+        return fail(r, frame, offset, message, STR(""));
     }
     Str const name = words[1].text;
     if (!is_variable_name(name)) {
@@ -291,7 +296,10 @@ static bool run_if(Renderer *r, Frame const *frame, size_t offset, Word const *w
         return fail(r, frame, offset, STR("too many {{if}}s inside each other"), STR(""));
     }
     Variable const *variable = find_variable(r, name);
-    Str const value = variable == NULL ? STR("") : variable->value;
+    Str value = STR("");
+    if (variable != NULL) {
+        value = variable->value;
+    }
     bool condition = value.len > 0;
     if (compare) {
         condition = str_eq(value, words[3].text) == str_eq(words[2].text, STR("=="));
@@ -396,7 +404,10 @@ static bool run_tag(Renderer *r, Frame const *frame, size_t offset, Str tag) {
  */
 static bool is_statement(Str tag) {
     size_t const space = str_find_any(tag, STR(" \t\r\n"));
-    Str const first = space == STR_NPOS ? tag : str_slice(tag, 0, space);
+    Str first = str_slice(tag, 0, space);
+    if (space == STR_NPOS) {
+        first = tag;
+    }
     return is_keyword(first);
 }
 
@@ -423,10 +434,16 @@ static bool find_own_line(Str text, size_t open, size_t close, size_t *line_star
     assert(line_start != NULL);
     assert(line_end != NULL);
     size_t const previous = str_rfind_char(str_slice(text, 0, open), '\n');
-    size_t const start = previous == STR_NPOS ? 0 : previous + 1;
+    size_t start = previous + 1;
+    if (previous == STR_NPOS) {
+        start = 0;
+    }
     Str const after = str_slice(text, close, text.len);
     size_t const newline = str_find_char(after, '\n');
-    Str const tail = newline == STR_NPOS ? after : str_slice(after, 0, newline);
+    Str tail = str_slice(after, 0, newline);
+    if (newline == STR_NPOS) {
+        tail = after;
+    }
     if (!only_blanks(str_slice(text, start, open)) || !only_blanks(tail)) {
         return false;
     }

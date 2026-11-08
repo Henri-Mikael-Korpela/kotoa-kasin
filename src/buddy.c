@@ -105,7 +105,7 @@ void *buddy_alloc(Buddy_Heap *heap, size_t size) {
     list_remove(heap, block);
     while (k > order) {  // Split, keeping the lower half and freeing the upper.
         k--;
-        Buddy_Header *upper = (Buddy_Header *)((uint8_t *)block + block_size(k));
+        Buddy_Header *upper = (Buddy_Header *)((byte *)block + block_size(k));
         upper->order = k;
         list_push(heap, upper);
     }
@@ -125,7 +125,7 @@ void buddy_free(Buddy_Heap *heap, void *ptr) {
     heap->bytes_in_use -= block_size(block->order);
     uint32_t order = block->order;
     while (order < heap->max_order) {
-        size_t offset = (size_t)((uint8_t *)block - heap->base);
+        size_t offset = (size_t)((byte *)block - heap->base);
         Buddy_Header *buddy = (Buddy_Header *)(heap->base + (offset ^ block_size(order)));
         if (!buddy->is_free || buddy->order != order) {
             break;

@@ -29,6 +29,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "byte.h"
 #include "ip.h"
 
 enum {
@@ -42,15 +43,15 @@ enum {
 static Str const GEOIP_MAGIC = STR_INIT("KGEOIP1\n");
 
 typedef struct {
-    uint8_t const *map;  /**< The mapped file, or NULL when no data is loaded. */
+    byte const *map;  /**< The mapped file, or NULL when no data is loaded. */
     void          *region;  /**< The same mapping, as munmap() takes it. */
     size_t         map_size;
     uint32_t       v4_count;
     uint32_t       v6_count;
-    uint8_t const *v4_starts;
-    uint8_t const *v4_countries;
-    uint8_t const *v6_starts;
-    uint8_t const *v6_countries;
+    byte const *v4_starts;
+    byte const *v4_countries;
+    byte const *v6_starts;
+    byte const *v6_countries;
 } GeoIP;
 
 /**

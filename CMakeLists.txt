@@ -3,18 +3,22 @@ project(kasin_httpd LANGUAGES C)
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
-set(CMAKE_C_EXTENSIONS ON)   # needs GNU extensions (memmem, accept4, ...)
+set(CMAKE_C_EXTENSIONS OFF)
+# memmem, accept4 and friends are declared only with this feature test macro, which keeps the
+# compiler itself in strict C11 mode.
+add_compile_definitions(_GNU_SOURCE)
 
 if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
   set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
 endif()
 
-# The compiler checks the C rules of CLAUDE.md it can: no information lost by an implicit
+# The compiler checks the C rules of docs/c-programming-style-guide.md it can: no information lost by an implicit
 # conversion, no hidden shadowing, every function declared before use and const kept.
 set(KASIN_WARNINGS
   -Wall -Wextra -Wpedantic
   -Wconversion -Wsign-conversion -Wshadow
-  -Wmissing-prototypes -Wstrict-prototypes -Wcast-qual)
+  -Wmissing-prototypes -Wstrict-prototypes -Wcast-qual
+  -Werror)
 
 # Memory is reserved once at startup from these values:
 #   total ~= threads * (conns_per_worker * (req_buf + resp_buf + sizeof(Conn))

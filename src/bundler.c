@@ -81,7 +81,10 @@ static bool join_path(Str dir, Str relative, Str suffix, char *buf, size_t capac
 
 static Str directory_of(Str path) {
     size_t const slash = str_rfind_char(path, '/');
-    return slash == STR_NPOS ? STR(".") : str_slice(path, 0, slash);
+    if (slash == STR_NPOS) {
+        return STR(".");
+    }
+    return str_slice(path, 0, slash);
 }
 
 /**
@@ -114,7 +117,10 @@ static bool read_file(Arena *arena, char const *path, Str *contents) {
             continue;
         }
         if (n <= 0) {
-            char const *reason = n < 0 ? strerror(errno) : "file shrank while reading";
+            char const *reason = "file shrank while reading";
+            if (n < 0) {
+                reason = strerror(errno);
+            }
             fprintf(stderr, "%s: %s\n", path, reason);
             close(fd);
             return false;
@@ -347,7 +353,11 @@ static void write_header(Bundler const *b, Bundle const *bundle, Str_Builder *ou
     }
     str_builder_append(out, STR(". Edit those, not this file."));
     str_builder_append(out, kind->comment_end);
-    str_builder_append(out, b->minify ? kind->prologue : kind->prologue_plain);
+    if (b->minify) {
+        str_builder_append(out, kind->prologue);
+    } else {
+        str_builder_append(out, kind->prologue_plain);
+    }
 }
 
 /**
@@ -391,7 +401,11 @@ static int write_body(Bundler const *b, Bundle const *bundle, Str const *content
     if (b->minify && kind->after_sources != NULL && !out->overflow) {
         kind->after_sources(out);
     }
-    str_builder_append(out, b->minify ? kind->epilogue : kind->epilogue_plain);
+    if (b->minify) {
+        str_builder_append(out, kind->epilogue);
+    } else {
+        str_builder_append(out, kind->epilogue_plain);
+    }
     return EXIT_SUCCESS;
 }
 
@@ -439,8 +453,12 @@ static int build_bundle(Bundler const *b, Bundle const *bundle, Str source_dir) 
     if (!write_file(path, str_builder_str(&out))) {
         return EX_CANTCREAT;
     }
-    printf("%s: %zu file%s, %zu -> %zu bytes\n", path, bundle->source_count,
-           bundle->source_count == 1 ? "" : "s", input_size, out.len);
+    char const *plural = "s";
+    if (bundle->source_count == 1) {
+        plural = "";
+    }
+    printf("%s: %zu file%s, %zu -> %zu bytes\n", path, bundle->source_count, plural, input_size,
+           out.len);
     return EXIT_SUCCESS;
 }
 
@@ -534,7 +552,7 @@ static int build_all(Bundler const *b, uint64_t *state) {
  * Rebuilds whenever the files change; does not return.
  */
 static void watch(Bundler const *b) {
-    for (;;) {
+    while (true) {
         uint64_t state;
         int const status = build_all(b, &state);
         if (status == EXIT_SUCCESS) {

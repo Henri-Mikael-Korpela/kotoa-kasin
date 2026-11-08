@@ -13,8 +13,10 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "byte.h"
+
 typedef struct {
-    uint8_t *base;
+    byte *base;
     size_t   capacity;
     size_t   used;
 } Arena;

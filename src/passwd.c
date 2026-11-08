@@ -113,7 +113,7 @@ static bool generate_password(char *buf, size_t length) {
     size_t const limit = 256 - 256 % GENERATED_ALPHABET.len;
     size_t filled = 0;
     while (filled < length) {
-        uint8_t random[64];
+        byte random[64];
         if (getrandom(random, sizeof random, 0) != (ssize_t)sizeof random) {
             return false;
         }
@@ -195,7 +195,10 @@ int main(int argc, char **argv) {
                 break;
             default:
                 usage(argv[0]);
-                return opt == 'h' ? EXIT_SUCCESS : EX_USAGE;
+                if (opt == 'h') {
+                    return EXIT_SUCCESS;
+                }
+                return EX_USAGE;
         }
     }
     if (optind != argc) {

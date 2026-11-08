@@ -65,4 +65,4 @@ password first; see [Running locally](docs/local-development.md).
 | [Programming mindset](docs/programming-mindset.md) | How to approach a change: simplicity, dependencies, performance and memory |
 | [C programming style guide](docs/c-programming-style-guide.md) | Layout, naming, strings, assertions, error handling and the other C rules |
 
-The short, checkable form of the C and JavaScript rules is in [CLAUDE.md](CLAUDE.md).
+The JavaScript rules and a pointer to the C guide are in [CLAUDE.md](CLAUDE.md).

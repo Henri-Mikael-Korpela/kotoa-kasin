@@ -16,6 +16,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "byte.h"
+
 enum {
     /** Smallest block, including its header, in bytes. */
     BUDDY_MIN_BLOCK = 64,
@@ -26,7 +28,7 @@ enum {
 typedef struct Buddy_Header Buddy_Header;
 
 typedef struct {
-    uint8_t         *base;
+    byte            *base;
     size_t           size;
     uint32_t         max_order;
     Buddy_Header    *free_lists[BUDDY_MAX_ORDERS];

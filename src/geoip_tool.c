@@ -18,5 +18,8 @@ int main(int argc, char **argv) {
         fprintf(stderr, "Usage: %s <dbip-country-lite.csv> <out.bin>\n", argv[0]);
         return EX_USAGE;
     }
-    return geoip_build_file(argv[1], argv[2]) ? EXIT_SUCCESS : EX_DATAERR;
+    if (geoip_build_file(argv[1], argv[2])) {
+        return EXIT_SUCCESS;
+    }
+    return EX_DATAERR;
 }

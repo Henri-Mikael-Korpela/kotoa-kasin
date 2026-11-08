@@ -42,10 +42,22 @@ static void expect_country(GeoIP const *g, char const *address, char const *expe
         return;
     }
     bool const found = geoip_country(g, &ip, country);
-    bool const ok = expected == NULL ? !found : found && memcmp(country, expected, 2) == 0;
+    bool ok = !found;
+    if (expected != NULL) {
+        ok = found && memcmp(country, expected, 2) == 0;
+    }
     if (!ok) {
-        printf("FAIL country of %s: got %.*s, want %s\n", address, found ? 2 : 7,
-               found ? country : "unknown", expected == NULL ? "unknown" : expected);
+        int got_length = 7;
+        char const *got = "unknown";
+        if (found) {
+            got_length = 2;
+            got = country;
+        }
+        char const *want = "unknown";
+        if (expected != NULL) {
+            want = expected;
+        }
+        printf("FAIL country of %s: got %.*s, want %s\n", address, got_length, got, want);
         FAILURES++;
     }
 }
@@ -133,7 +145,7 @@ int main(void) {
     unlink(bin);
 
     if (FAILURES > 0) {
-        printf("%d failure%s\n", FAILURES, FAILURES == 1 ? "" : "s");
+        printf("%d failure(s)\n", FAILURES);
         return EXIT_FAILURE;
     }
     printf("all address and country tests passed\n");

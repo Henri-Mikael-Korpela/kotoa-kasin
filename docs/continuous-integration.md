@@ -22,7 +22,7 @@ The checks and the reasons for the ones that are off are in `.clang-tidy`. In sh
   free, uninitialised values and similar bugs found by following the code's paths,
 - `bugprone-*`: likely mistakes such as repeated branch bodies and implicit widening of
   a multiplication,
-- `misc-no-recursion`: the rule of [CLAUDE.md](../CLAUDE.md) against recursion,
+- `misc-no-recursion`: the rule of the [C programming style guide](c-programming-style-guide.md) against recursion,
 - `readability-non-const-parameter`: pointer parameters that could be `const`.
 
 Every finding fails the job. The clang-tidy version is pinned in the workflow, so a new

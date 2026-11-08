@@ -20,7 +20,7 @@ static void append_sextet(Str_Builder *out, uint32_t value) {
     str_builder_append_char(out, BASE64URL.data[value & 63]);
 }
 
-static bool base64url_encode(Str_Builder *out, uint8_t const *data, size_t len) {
+static bool base64url_encode(Str_Builder *out, byte const *data, size_t len) {
     assert(out != NULL);
     size_t i = 0;
     while (i + 3 <= len) {
@@ -64,7 +64,7 @@ static int base64url_value(char c) {
     return -1;
 }
 
-static bool base64url_decode(Str in, uint8_t *out, size_t capacity, size_t *out_len) {
+static bool base64url_decode(Str in, byte *out, size_t capacity, size_t *out_len) {
     assert(out != NULL);
     assert(out_len != NULL);
     if (in.len % 4 == 1) {
@@ -85,7 +85,7 @@ static bool base64url_decode(Str in, uint8_t *out, size_t capacity, size_t *out_
             if (n == capacity) {
                 return false;
             }
-            out[n++] = (uint8_t)(acc >> bits);
+            out[n++] = (byte)(acc >> bits);
         }
     }
     *out_len = n;
@@ -93,7 +93,7 @@ static bool base64url_decode(Str in, uint8_t *out, size_t capacity, size_t *out_
 }
 
 static bool sign(Str_Builder *out, Str signing_input, Str key) {
-    uint8_t mac[SHA256_DIGEST_SIZE];
+    byte mac[SHA256_DIGEST_SIZE];
     hmac_sha256(key.data, key.len, signing_input.data, signing_input.len, mac);
     return base64url_encode(out, mac, sizeof mac);
 }
@@ -142,7 +142,7 @@ bool jwt_issue(Str_Builder *out, Str subject, int64_t issued_at, int64_t expires
     size_t start = out->len;
     str_builder_append(out, HEADER_B64);
     str_builder_append(out, STR("."));
-    base64url_encode(out, (uint8_t const *)payload.data, payload.len);
+    base64url_encode(out, (byte const *)payload.data, payload.len);
     if (out->overflow) {
         return false;
     }
@@ -171,7 +171,7 @@ bool jwt_verify(Str token, Str key, int64_t now, JWT_Claims *claims) {
         return false;
     }
 
-    uint8_t payload_buf[MAX_PAYLOAD];
+    byte payload_buf[MAX_PAYLOAD];
     size_t payload_len;
     if (!base64url_decode(payload_b64, payload_buf, sizeof payload_buf, &payload_len)) {
         return false;

@@ -142,7 +142,7 @@ int main(void) {
     expect_names("x = function y() {};\nif (a) { var b = 1; }", "");
 
     if (FAILURES > 0) {
-        printf("%d failure%s\n", FAILURES, FAILURES == 1 ? "" : "s");
+        printf("%d failure(s)\n", FAILURES);
         return EXIT_FAILURE;
     }
     printf("all jsmin tests passed\n");

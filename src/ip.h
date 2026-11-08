@@ -12,6 +12,8 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#include "byte.h"
+
 #include "str.h"
 
 enum {
@@ -20,13 +22,13 @@ enum {
 };
 
 typedef struct {
-    uint8_t bytes[16];
+    byte bytes[16];
 } IP_Address;
 
 /**
  * Makes an address from IPv4 bytes in network order.
  */
-IP_Address ip_from_v4(uint8_t const bytes[4]);
+IP_Address ip_from_v4(byte const bytes[4]);
 
 /**
  * Reads an address in text form: dotted IPv4 or IPv6.

@@ -22,7 +22,7 @@ static uint16_t const LENGTH_BASE[LENGTH_CODES] = {
     3,  4,  5,  6,  7,  8,  9,  10, 11,  13,  15,  17,  19,  23, 27,
     31, 35, 43, 51, 59, 67, 83, 99, 115, 131, 163, 195, 227, 258,
 };
-static uint8_t const LENGTH_EXTRA[LENGTH_CODES] = {
+static byte const LENGTH_EXTRA[LENGTH_CODES] = {
     0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4, 5, 5, 5, 5, 0,
 };
 
@@ -31,15 +31,16 @@ static uint16_t const DISTANCE_BASE[DISTANCE_CODES] = {
     1,   2,   3,   4,   5,   7,    9,    13,   17,   25,   33,   49,   65,    97,    129,
     193, 257, 385, 513, 769, 1025, 1537, 2049, 3073, 4097, 6145, 8193, 12289, 16385, 24577,
 };
-static uint8_t const DISTANCE_EXTRA[DISTANCE_CODES] = {
-    0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 9, 9, 10, 10, 11, 11, 12, 12, 13, 13,
+static byte const DISTANCE_EXTRA[DISTANCE_CODES] = {
+    0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 9, 9, 10, 10, 11, 11, 12, 12, 13,
+    13,
 };
 
 /**
  * Writes bits into a buffer, least significant bit first, as deflate wants them.
  */
 typedef struct {
-    uint8_t *out;
+    byte *out;
     size_t   capacity;
     size_t   len;
     uint32_t bits;  // Bits not yet written as a whole byte.
@@ -47,7 +48,7 @@ typedef struct {
     bool     overflow;  // Set once a byte did not fit.
 } Bit_Writer;
 
-static void put_byte(Bit_Writer *w, uint8_t value) {
+static void put_byte(Bit_Writer *w, byte value) {
     if (w->len >= w->capacity) {
         w->overflow = true;
         return;
@@ -64,7 +65,7 @@ static void put_bits(Bit_Writer *w, uint32_t value, unsigned count) {
     w->bits |= value << w->count;
     w->count += count;
     while (w->count >= 8) {
-        put_byte(w, (uint8_t)(w->bits & 0xffu));
+        put_byte(w, (byte)(w->bits & 0xffu));
         w->bits >>= 8;
         w->count -= 8;
     }
@@ -118,7 +119,7 @@ static void put_match(Bit_Writer *w, unsigned length, unsigned distance) {
     put_bits(w, distance - DISTANCE_BASE[slot], DISTANCE_EXTRA[slot]);
 }
 
-static uint32_t hash_of(uint8_t const *p) {
+static uint32_t hash_of(byte const *p) {
     uint32_t const key = ((uint32_t)p[0] << 16) | ((uint32_t)p[1] << 8) | (uint32_t)p[2];
     return (key * 2654435761u) >> (32 - HASH_BITS);
 }
@@ -126,7 +127,7 @@ static uint32_t hash_of(uint8_t const *p) {
 /**
  * How many bytes at the start of a and b are the same, up to limit.
  */
-static size_t common_length(uint8_t const *a, uint8_t const *b, size_t limit) {
+static size_t common_length(byte const *a, byte const *b, size_t limit) {
     size_t n = 0;
     while (n < limit && a[n] == b[n]) {
         n++;
@@ -134,12 +135,16 @@ static size_t common_length(uint8_t const *a, uint8_t const *b, size_t limit) {
     return n;
 }
 
-static uint32_t crc32_of(uint8_t const *data, size_t len) {
+static uint32_t crc32_of(byte const *data, size_t len) {
     uint32_t crc = 0xffffffffu;
     for (size_t i = 0; i < len; i++) {
         crc ^= data[i];
         for (int bit = 0; bit < 8; bit++) {
-            crc = (crc >> 1) ^ ((crc & 1u) != 0 ? 0xedb88320u : 0u);
+            uint32_t polynomial = 0;
+            if ((crc & 1u) != 0) {
+                polynomial = 0xedb88320u;
+            }
+            crc = (crc >> 1) ^ polynomial;
         }
     }
     return ~crc;
@@ -147,16 +152,16 @@ static uint32_t crc32_of(uint8_t const *data, size_t len) {
 
 static void put_u32_le(Bit_Writer *w, uint32_t value) {
     for (unsigned i = 0; i < 4; i++) {
-        put_byte(w, (uint8_t)((value >> (8 * i)) & 0xffu));
+        put_byte(w, (byte)((value >> (8 * i)) & 0xffu));
     }
 }
 
-size_t gzip_compress(Str input, uint8_t *out, size_t capacity) {
+size_t gzip_compress(Str input, byte *out, size_t capacity) {
     assert(out != NULL);
     if (input.len > GZIP_MAX_INPUT || capacity < HEADER_SIZE + TRAILER_SIZE + 2) {
         return 0;
     }
-    uint8_t const *const in = (uint8_t const *)input.data;
+    byte const *const in = (byte const *)input.data;
     size_t const n = input.len;
 
     Bit_Writer w = {
@@ -168,7 +173,7 @@ size_t gzip_compress(Str input, uint8_t *out, size_t capacity) {
         .overflow = false,
     };
     // Magic, deflate, no flags, no time, no extra flags, Unix.
-    static uint8_t const HEADER[HEADER_SIZE] = {0x1f, 0x8b, 8, 0, 0, 0, 0, 0, 0, 3};
+    static byte const HEADER[HEADER_SIZE] = {0x1f, 0x8b, 8, 0, 0, 0, 0, 0, 0, 3};
     for (size_t i = 0; i < HEADER_SIZE; i++) {
         put_byte(&w, HEADER[i]);
     }
@@ -189,7 +194,10 @@ size_t gzip_compress(Str input, uint8_t *out, size_t capacity) {
             size_t const found = last[h];
             last[h] = (uint16_t)(i + 1);
             if (found != 0 && i - (found - 1) <= WINDOW_SIZE) {
-                size_t const limit = n - i < MAX_MATCH ? n - i : MAX_MATCH;
+                size_t limit = MAX_MATCH;
+                if (n - i < MAX_MATCH) {
+                    limit = n - i;
+                }
                 length = common_length(in + (found - 1), in + i, limit);
                 distance = i - (found - 1);
             }
@@ -212,5 +220,8 @@ size_t gzip_compress(Str input, uint8_t *out, size_t capacity) {
     }
     put_u32_le(&w, crc32_of(in, n));
     put_u32_le(&w, (uint32_t)n);
-    return w.overflow ? 0 : w.len;
+    if (w.overflow) {
+        return 0;
+    }
+    return w.len;
 }

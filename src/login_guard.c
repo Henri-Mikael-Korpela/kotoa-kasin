@@ -16,7 +16,10 @@ int64_t login_guard_wait(uint32_t failures) {
         return 0;
     }
     int64_t const wait = (int64_t)1 << (failures - LOGIN_FREE_FAILURES);
-    return wait < LOGIN_MAX_DELAY_SEC ? wait : LOGIN_MAX_DELAY_SEC;
+    if (wait < LOGIN_MAX_DELAY_SEC) {
+        return wait;
+    }
+    return LOGIN_MAX_DELAY_SEC;
 }
 
 void login_guard_init(Login_Guard *g, int64_t now) {
@@ -37,7 +40,10 @@ static Login_Guard_Entry *find(Login_Guard *g, IP_Address const *ip, int64_t now
     for (size_t i = 0; i < LOGIN_GUARD_SLOTS; i++) {
         Login_Guard_Entry *e = &g->entries[i];
         if (e->last_failure != 0 && ip_eq(&e->ip, ip)) {
-            return is_stale(e, now) ? NULL : e;
+            if (is_stale(e, now)) {
+                return NULL;
+            }
+            return e;
         }
     }
     return NULL;
@@ -66,7 +72,10 @@ static Login_Guard_Entry *find_or_add(Login_Guard *g, IP_Address const *ip, int6
             oldest = e;
         }
     }
-    Login_Guard_Entry *slot = free_slot != NULL ? free_slot : oldest;
+    Login_Guard_Entry *slot = oldest;
+    if (free_slot != NULL) {
+        slot = free_slot;
+    }
     memset(slot, 0, sizeof *slot);
     slot->ip = *ip;
     return slot;
@@ -83,7 +92,10 @@ static Login_Decision decision_for(Login_Guard_Entry const *e, int64_t now) {
         .refused = 0,
     };
     if (now < until) {
-        d.verdict = e->failures >= LOGIN_BAN_FAILURES ? LOGIN_BANNED : LOGIN_DELAYED;
+        d.verdict = LOGIN_DELAYED;
+        if (e->failures >= LOGIN_BAN_FAILURES) {
+            d.verdict = LOGIN_BANNED;
+        }
         d.retry_after = until - now;
     }
     return d;
@@ -101,8 +113,14 @@ static void refill(Login_Guard *g, int64_t now) {
     }
     int64_t const tokens = (int64_t)g->tokens + periods;
     bool const full = tokens >= LOGIN_CHECKS_PER_MINUTE;
-    g->tokens = full ? LOGIN_CHECKS_PER_MINUTE : (uint32_t)tokens;
-    g->tokens_at = full ? now : g->tokens_at + periods * CHECK_PERIOD_SEC;
+    g->tokens = (uint32_t)tokens;
+    if (full) {
+        g->tokens = LOGIN_CHECKS_PER_MINUTE;
+    }
+    g->tokens_at = g->tokens_at + periods * CHECK_PERIOD_SEC;
+    if (full) {
+        g->tokens_at = now;
+    }
 }
 
 // Counts a refusal and says whether this one is to be logged.

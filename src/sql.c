@@ -33,7 +33,10 @@ bool sql_exec(sqlite3 *conn, Str sql, Str context) {
 
 bool sql_prepare(sqlite3 *conn, sqlite3_stmt **stmt, Str sql, bool persistent) {
     assert(stmt != NULL);
-    unsigned int flags = persistent ? SQLITE_PREPARE_PERSISTENT : 0;
+    unsigned int flags = 0;
+    if (persistent) {
+        flags = SQLITE_PREPARE_PERSISTENT;
+    }
     if (sqlite3_prepare_v3(conn, sql.data, (int)sql.len, flags, stmt, NULL) != SQLITE_OK) {
         fprintf(stderr, "db: cannot prepare statement: %s\n", sqlite3_errmsg(conn));
         return false;
@@ -43,11 +46,17 @@ bool sql_prepare(sqlite3 *conn, sqlite3_stmt **stmt, Str sql, bool persistent) {
 
 bool sql_bind_str(sqlite3_stmt *stmt, int index, Str value) {
     // An empty Str may carry a NULL pointer, which SQLite would read as NULL.
-    char const *data = value.len > 0 ? value.data : "";
+    char const *data = "";
+    if (value.len > 0) {
+        data = value.data;
+    }
     return sqlite3_bind_text(stmt, index, data, (int)value.len, SQLITE_TRANSIENT) == SQLITE_OK;
 }
 
 Str sql_column_str(sqlite3_stmt *stmt, int column) {
     char const *text = (char const *)sqlite3_column_text(stmt, column);
-    return str_make(text ? text : "", (size_t)sqlite3_column_bytes(stmt, column));
+    if (text == NULL) {
+        return str_make("", 0);
+    }
+    return str_make(text, (size_t)sqlite3_column_bytes(stmt, column));
 }

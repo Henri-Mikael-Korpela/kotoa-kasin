@@ -19,7 +19,7 @@ enum {
     PATH_CAPACITY = 4096,
 };
 
-static uint8_t const UNKNOWN[2] = {
+static byte const UNKNOWN[2] = {
     'Z',
     'Z',
 };
@@ -29,10 +29,10 @@ static uint8_t const UNKNOWN[2] = {
  */
 typedef struct {
     size_t   width;  /**< Bytes per address: 4 or 16. */
-    uint8_t *starts;
-    uint8_t *countries;
+    byte *starts;
+    byte *countries;
     size_t   count;
-    uint8_t  next[16];  /**< Where the next range must start for there to be no gap. */
+    byte     next[16];  /**< Where the next range must start for there to be no gap. */
     bool     seen;  /**< Whether any range of this family was read. */
     bool     full;  /**< Whether the last range reached the highest address. */
 } Family;
@@ -49,8 +49,14 @@ static bool family_init(Family *f, size_t width) {
                         MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
     void *countries = mmap(NULL, (size_t)MAX_RANGES * 2, PROT_READ | PROT_WRITE,
                            MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
-    f->starts = starts == MAP_FAILED ? NULL : starts;
-    f->countries = countries == MAP_FAILED ? NULL : countries;
+    f->starts = starts;
+    if (starts == MAP_FAILED) {
+        f->starts = NULL;
+    }
+    f->countries = countries;
+    if (countries == MAP_FAILED) {
+        f->countries = NULL;
+    }
     if (f->starts == NULL || f->countries == NULL) {
         perror("geoip: mmap");
         return false;
@@ -68,7 +74,7 @@ static void family_free(Family *f) {
 }
 
 // Adds a range start, or nothing when it continues the previous range's country.
-static bool add_start(Family *f, uint8_t const *start, uint8_t const country[2]) {
+static bool add_start(Family *f, byte const *start, byte const country[2]) {
     assert(f != NULL);
     if (f->count > 0 && memcmp(f->countries + (f->count - 1) * 2, country, 2) == 0) {
         return true;
@@ -83,7 +89,7 @@ static bool add_start(Family *f, uint8_t const *start, uint8_t const country[2])
 }
 
 // Adds one to a big-endian number; returns false when it wraps around to zero.
-static bool increment(uint8_t *bytes, size_t width) {
+static bool increment(byte *bytes, size_t width) {
     assert(bytes != NULL);
     for (size_t i = width; i > 0; i--) {
         if (++bytes[i - 1] != 0) {
@@ -98,8 +104,8 @@ static bool increment(uint8_t *bytes, size_t width) {
  *
  * @return NULL when the range was added, otherwise what is wrong with it.
  */
-static char const *add_range(Family *f, uint8_t const *first, uint8_t const *last,
-                             uint8_t const country[2]) {
+static char const *add_range(Family *f, byte const *first, byte const *last,
+                             byte const country[2]) {
     assert(f != NULL);
     if (f->full) {
         return "range after the end of the address space";
@@ -126,7 +132,7 @@ static bool family_finish(Family *f) {
 }
 
 static bool write_all(int fd, void const *data, size_t len) {
-    uint8_t const *bytes = data;
+    byte const *bytes = data;
     size_t done = 0;
     while (done < len) {
         ssize_t const n = write(fd, bytes + done, len - done);
@@ -141,11 +147,11 @@ static bool write_all(int fd, void const *data, size_t len) {
     return true;
 }
 
-static void put_u32_le(uint8_t *p, uint32_t value) {
-    p[0] = (uint8_t)value;
-    p[1] = (uint8_t)(value >> 8);
-    p[2] = (uint8_t)(value >> 16);
-    p[3] = (uint8_t)(value >> 24);
+static void put_u32_le(byte *p, uint32_t value) {
+    p[0] = (byte)value;
+    p[1] = (byte)(value >> 8);
+    p[2] = (byte)(value >> 16);
+    p[3] = (byte)(value >> 24);
 }
 
 static bool write_output(char const *out_path, Family const *v4, Family const *v6) {
@@ -163,7 +169,7 @@ static bool write_output(char const *out_path, Family const *v4, Family const *v
         fprintf(stderr, "geoip: cannot create %s: %s\n", tmp, strerror(errno));
         return false;
     }
-    uint8_t header[GEOIP_HEADER_SIZE];
+    byte header[GEOIP_HEADER_SIZE];
     memcpy(header, GEOIP_MAGIC.data, GEOIP_MAGIC.len);
     put_u32_le(header + GEOIP_MAGIC_SIZE, (uint32_t)v4->count);
     put_u32_le(header + GEOIP_MAGIC_SIZE + 4, (uint32_t)v6->count);
@@ -189,7 +195,7 @@ static Str unquote(Str s) {
     return s;
 }
 
-static bool parse_address(Str text, int family, uint8_t *out) {
+static bool parse_address(Str text, int family, byte *out) {
     char buf[IP_TEXT_SIZE];
     return str_to_cstr(text, buf, sizeof buf) && inet_pton(family, buf, out) == 1;
 }
@@ -219,13 +225,20 @@ static char const *parse_csv_line(Str line, Family *v4, Family *v6) {
         return "country is not two capital letters";
     }
     bool const is_v6 = str_find_char(first_text, ':') != STR_NPOS;
-    int const family = is_v6 ? AF_INET6 : AF_INET;
-    uint8_t first[16];
-    uint8_t last[16];
+    int family = AF_INET;
+    if (is_v6) {
+        family = AF_INET6;
+    }
+    byte first[16];
+    byte last[16];
     if (!parse_address(first_text, family, first) || !parse_address(last_text, family, last)) {
         return "not an IP address";
     }
-    return add_range(is_v6 ? v6 : v4, first, last, (uint8_t const *)country_text.data);
+    Family *list = v4;
+    if (is_v6) {
+        list = v6;
+    }
+    return add_range(list, first, last, (byte const *)country_text.data);
 }
 
 // Reads the CSV lines into the two families.

@@ -1,5 +1,6 @@
 #include <assert.h>
 
+#include "byte.h"
 #include "cssmin.h"
 
 /**
@@ -29,19 +30,22 @@ typedef struct {
     Minify_Error *error;
 } Scanner;
 
-static unsigned char byte_at(Str s, size_t i) {
-    return i < s.len ? (unsigned char)s.data[i] : 0;
+static byte byte_at(Str s, size_t i) {
+    if (i < s.len) {
+        return (byte)s.data[i];
+    }
+    return 0;
 }
 
-static bool is_space(unsigned char c) {
+static bool is_space(byte c) {
     return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f';
 }
 
-static bool is_digit(unsigned char c) {
+static bool is_digit(byte c) {
     return c >= '0' && c <= '9';
 }
 
-static bool is_hex(unsigned char c) {
+static bool is_hex(byte c) {
     return is_digit(c) || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
 }
 
@@ -49,13 +53,16 @@ static bool is_hex(unsigned char c) {
  * Whether a byte can be part of a name or number, so that two of them side by
  * side would read as one.
  */
-static bool is_name_byte(unsigned char c) {
+static bool is_name_byte(byte c) {
     return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || is_digit(c) ||
            c == '-' || c == '_' || c == '\\' || c >= 0x80;
 }
 
-static unsigned char lower(unsigned char c) {
-    return c >= 'A' && c <= 'Z' ? (unsigned char)(c + ('a' - 'A')) : c;
+static byte lower(byte c) {
+    if (c >= 'A' && c <= 'Z') {
+        return (byte)(c + ('a' - 'A'));
+    }
+    return c;
 }
 
 static bool starts_with_nocase(Str s, size_t pos, Str prefix) {
@@ -63,7 +70,7 @@ static bool starts_with_nocase(Str s, size_t pos, Str prefix) {
         return false;
     }
     for (size_t i = 0; i < prefix.len; i++) {
-        if (lower(byte_at(s, pos + i)) != (unsigned char)prefix.data[i]) {
+        if (lower(byte_at(s, pos + i)) != (byte)prefix.data[i]) {
             return false;
         }
     }
@@ -102,16 +109,20 @@ static bool fail(Minify_Error *error, Str source, size_t offset, Str message) {
 static size_t scan_string(Scanner *sc, size_t start, bool *ok) {
     assert(ok != NULL);
     Str const s = sc->source;
-    unsigned char const quote = byte_at(s, start);
+    byte const quote = byte_at(s, start);
     size_t pos = start + 1;
     while (pos < s.len) {
-        unsigned char const c = byte_at(s, pos);
+        byte const c = byte_at(s, pos);
         if (c == quote) {
             return pos + 1;
         }
         if (c == '\\') {
             // An escaped "\r\n" is one line continuation.
-            pos += byte_at(s, pos + 1) == '\r' && byte_at(s, pos + 2) == '\n' ? 3 : 2;
+            if (byte_at(s, pos + 1) == '\r' && byte_at(s, pos + 2) == '\n') {
+                pos += 3;
+            } else {
+                pos += 2;
+            }
         } else if (c == '\n' || c == '\r' || c == '\f') {
             break;
         } else {
@@ -139,7 +150,10 @@ static size_t scan_escape(Scanner *sc, size_t start) {
     if (byte_at(s, pos) == '\r' && byte_at(s, pos + 1) == '\n') {
         return pos + 2;
     }
-    return is_space(byte_at(s, pos)) ? pos + 1 : pos;
+    if (is_space(byte_at(s, pos))) {
+        return pos + 1;
+    }
+    return pos;
 }
 
 /**
@@ -157,7 +171,11 @@ static size_t scan_url(Scanner *sc, size_t start, bool *ok) {
         return 0;
     }
     while (pos < s.len && byte_at(s, pos) != ')') {
-        pos += byte_at(s, pos) == '\\' ? 2 : 1;
+        if (byte_at(s, pos) == '\\') {
+            pos += 2;
+        } else {
+            pos += 1;
+        }
     }
     if (pos >= s.len) {
         *ok = fail(sc->error, s, start, STR("unterminated url()"));
@@ -176,7 +194,7 @@ static bool next_piece(Scanner *sc, Piece *p) {
         p->text = STR("");
         return true;
     }
-    unsigned char const c = byte_at(s, start);
+    byte const c = byte_at(s, start);
     size_t end = start + 1;
     bool ok = true;
     if (is_space(c)) {
@@ -230,7 +248,7 @@ static bool is_leading_zero(Str s, size_t offset) {
     if (offset == 0) {
         return true;
     }
-    unsigned char const before = byte_at(s, offset - 1);
+    byte const before = byte_at(s, offset - 1);
     bool const signed_number = (before == '-' || before == '+') &&
                                (offset == 1 || !is_name_byte(byte_at(s, offset - 2)));
     if (signed_number) {
@@ -245,7 +263,7 @@ static bool is_leading_zero(Str s, size_t offset) {
  * @param whitespace Whether whitespace separated them in the source; if not,
  *                   only a comment did.
  */
-static bool needs_space(unsigned char last, unsigned char next, bool whitespace) {
+static bool needs_space(byte last, byte next, bool whitespace) {
     if (!whitespace) {
         return is_name_byte(last) && is_name_byte(next);  // A comment kept "1px/**/2px" apart.
     }
@@ -264,7 +282,7 @@ static bool needs_space(unsigned char last, unsigned char next, bool whitespace)
  */
 static bool ends_custom_property_name(Str_Builder const *out) {
     size_t start = out->len - 1;  // At the ":".
-    while (start > 0 && is_name_byte((unsigned char)out->data[start - 1])) {
+    while (start > 0 && is_name_byte((byte)out->data[start - 1])) {
         start--;
     }
     if (out->len - 1 - start < 2 || out->data[start] != '-' || out->data[start + 1] != '-') {
@@ -279,14 +297,14 @@ static bool ends_custom_property_name(Str_Builder const *out) {
  * comma is part of the value scripts see. The value ends at the ";" or "}"
  * that is not inside brackets, which is left for the caller to read.
  */
-static bool copy_custom_property_value(Scanner *sc, Str_Builder *out, unsigned char *last) {
+static bool copy_custom_property_value(Scanner *sc, Str_Builder *out, byte *last) {
     assert(out != NULL);
     assert(last != NULL);
     size_t const start = sc->pos;
     size_t nesting = 0;
     Piece p;
     // Each pass reads one piece, so the loop ends with the source.
-    for (;;) {
+    while (true) {
         size_t const before = sc->pos;
         if (!next_piece(sc, &p)) {
             return false;
@@ -297,7 +315,7 @@ static bool copy_custom_property_value(Scanner *sc, Str_Builder *out, unsigned c
         if (p.kind != PIECE_CHAR) {
             continue;
         }
-        unsigned char const c = (unsigned char)p.text.data[0];
+        byte const c = (byte)p.text.data[0];
         if (c == '(' || c == '[' || c == '{') {
             nesting++;
         } else if ((c == ')' || c == ']' || c == '}') && nesting > 0) {
@@ -310,7 +328,7 @@ static bool copy_custom_property_value(Scanner *sc, Str_Builder *out, unsigned c
     Str const value = trim_space(str_slice(sc->source, start, sc->pos));
     str_builder_append(out, value);
     if (value.len > 0) {
-        *last = (unsigned char)value.data[value.len - 1];
+        *last = (byte)value.data[value.len - 1];
     }
     return true;
 }
@@ -361,11 +379,11 @@ bool css_minify(Str source, Str_Builder *out, Minify_Error *error) {
     };
     bool whitespace = false;  // Whitespace since the last byte written.
     bool comment = false;     // A comment since the last byte written.
-    unsigned char last = 0;   // The last byte written by this call; 0 before the first.
+    byte last = 0;   // The last byte written by this call; 0 before the first.
     size_t depth = 0;
     Piece p;
     // Each pass reads one piece, so the loop ends with the source.
-    for (;;) {
+    while (true) {
         if (!next_piece(&sc, &p)) {
             return false;
         }
@@ -384,7 +402,7 @@ bool css_minify(Str source, Str_Builder *out, Minify_Error *error) {
             continue;  // 0.5 is written .5; the spacing is decided at the ".".
         }
 
-        unsigned char const first = (unsigned char)p.text.data[0];
+        byte const first = (byte)p.text.data[0];
         if ((whitespace || comment) && last != 0 && needs_space(last, first, whitespace)) {
             str_builder_append_char(out, ' ');
         }
@@ -404,7 +422,7 @@ bool css_minify(Str source, Str_Builder *out, Minify_Error *error) {
         }
 
         write_piece(out, &p);
-        last = (unsigned char)p.text.data[p.text.len - 1];
+        last = (byte)p.text.data[p.text.len - 1];
 
         bool const property_colon = p.kind == PIECE_CHAR && first == ':' && !out->overflow;
         if (property_colon && ends_custom_property_name(out)) {
@@ -426,7 +444,7 @@ bool css_check(Str source, Minify_Error *error) {
     size_t depth = 0;
     Piece p;
     // Each pass reads one piece, so the loop ends with the source.
-    for (;;) {
+    while (true) {
         if (!next_piece(&sc, &p)) {
             return false;
         }
@@ -436,7 +454,7 @@ bool css_check(Str source, Minify_Error *error) {
         if (p.kind != PIECE_CHAR) {
             continue;
         }
-        unsigned char const c = (unsigned char)p.text.data[0];
+        byte const c = (byte)p.text.data[0];
         if (c == '{') {
             depth++;
         } else if (c == '}') {

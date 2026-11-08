@@ -20,7 +20,7 @@ static void check(char const *label, bool ok) {
     }
 }
 
-static void to_hex(uint8_t const *bytes, size_t size, char *out) {
+static void to_hex(byte const *bytes, size_t size, char *out) {
     static char const digits[] = "0123456789abcdef";
     for (size_t i = 0; i < size; i++) {
         out[2 * i] = digits[bytes[i] >> 4];
@@ -32,8 +32,8 @@ static void to_hex(uint8_t const *bytes, size_t size, char *out) {
 // Published PBKDF2-HMAC-SHA256 test vectors with a 32-byte output.
 static void expect_pbkdf2(char const *password, char const *salt, uint32_t iterations,
                           char const *expected) {
-    uint8_t key[SHA256_DIGEST_SIZE];
-    pbkdf2_sha256(str_from_cstr(password), (uint8_t const *)salt, strlen(salt), iterations, key);
+    byte key[SHA256_DIGEST_SIZE];
+    pbkdf2_sha256(str_from_cstr(password), (byte const *)salt, strlen(salt), iterations, key);
     char hex[2 * SHA256_DIGEST_SIZE + 1];
     to_hex(key, sizeof key, hex);
     if (strcmp(hex, expected) != 0) {
@@ -115,7 +115,7 @@ int main(void) {
     }
 
     if (FAILURES > 0) {
-        printf("%d failure%s\n", FAILURES, FAILURES == 1 ? "" : "s");
+        printf("%d failure(s)\n", FAILURES);
         return EXIT_FAILURE;
     }
     printf("all password tests passed\n");
