@@ -219,7 +219,9 @@ static bool big_acquire(Worker *w, Conn *c) {
     return true;
 }
 
-// Returns the large buffer and points the connection back at its own buffers.
+/**
+ * Returns the large buffer and points the connection back at its own buffers.
+ */
 static void big_release(Worker *w, Conn *c) {
     if (!c->big) {
         return;
@@ -1085,7 +1087,9 @@ static Str clean_text(Str text, char *buf, size_t capacity, bool ascii_only) {
     return str_make(buf, len);
 }
 
-// Appends text in double quotes, with quotes and backslashes escaped, for log lines.
+/**
+ * Appends text in double quotes, with quotes and backslashes escaped, for log lines.
+ */
 static void append_quoted(Str_Builder *out, Str text) {
     str_builder_append_char(out, '"');
     for (size_t i = 0; i < text.len; i++) {
@@ -1108,7 +1112,9 @@ static void append_client(Str_Builder *out, Login_Client const *client) {
     str_builder_append(out, STR(")"));
 }
 
-// Writes a finished log line to stderr, which Azure Container Apps keeps as the console log.
+/**
+ * Writes a finished log line to stderr, which Azure Container Apps keeps as the console log.
+ */
 static void log_line(Str_Builder const *line) {
     fprintf(stderr, "%.*s\n", STR_ARG(str_builder_str(line)));
 }
@@ -1388,7 +1394,9 @@ static DB_Status build_login_report(Worker *w, int64_t now, Str_Builder *body) {
     return DB_OK;
 }
 
-// GET /api/login-attempts (auth): the admin's "Kirjautumiset" view.
+/**
+ * GET /api/login-attempts (auth): the admin's "Kirjautumiset" view.
+ */
 static void api_login_report(Worker *w, Conn *c, Request const *r) {
     if (!authenticate(r, NULL)) {
         respond_unauthorized(c);
@@ -1411,7 +1419,9 @@ static void api_login_report(Worker *w, Conn *c, Request const *r) {
     respond_json(c, 200, &body, r->head_only, NO_STORE);
 }
 
-// DELETE /api/login-blocks/{client id} (auth): lifts an address's wait or ban.
+/**
+ * DELETE /api/login-blocks/{client id} (auth): lifts an address's wait or ban.
+ */
 static void api_login_unblock(Worker *w, Conn *c, Request const *r, int64_t id) {
     if (!authenticate(r, NULL)) {
         respond_unauthorized(c);
@@ -1555,7 +1565,9 @@ static void respond_method_not_allowed(Conn *c, Str allow_header) {
     respond_json_error(c, 405, STR("method not allowed"), allow_header);
 }
 
-// The file extension for an image, judged by its first bytes; empty if unknown.
+/**
+ * The file extension for an image, judged by its first bytes; empty if unknown.
+ */
 static Str image_extension(Str bytes) {
     if (str_starts_with(bytes, STR("\xFF\xD8\xFF"))) {
         return STR("jpg");
@@ -1589,7 +1601,9 @@ static Str clean_original_name(Str name) {
     return name;
 }
 
-// Writes bytes to a new file in the uploads directory, then moves it into place.
+/**
+ * Writes bytes to a new file in the uploads directory, then moves it into place.
+ */
 static bool write_upload(Str file_name, Str bytes) {
     char final_buf[64];
     char part_buf[64];
@@ -2530,7 +2544,9 @@ static int make_listener(uint16_t port) {
     return fd;
 }
 
-// Called for each address with recent failures in the database at startup.
+/**
+ * Called for each address with recent failures in the database at startup.
+ */
 static void restore_login_failures(void *context, Str ip_text, uint32_t failures,
                                    int64_t last_failure) {
     IP_Address ip;
@@ -2841,7 +2857,9 @@ static int create_worker(Arena *arena, Settings const *settings, int id, Worker 
     return EXIT_SUCCESS;
 }
 
-// Waits and bans from before a restart still apply.
+/**
+ * Waits and bans from before a restart still apply.
+ */
 static void restore_login_state(Worker *w) {
     size_t restored = 0;
     if (db_recent_login_failures(&w->db, unix_now() - LOGIN_WINDOW_SEC, restore_login_failures,

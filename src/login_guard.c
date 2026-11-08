@@ -35,7 +35,9 @@ static bool is_stale(Login_Guard_Entry const *e, int64_t now) {
     return e->last_failure == 0 || now - e->last_failure >= LOGIN_WINDOW_SEC;
 }
 
-// The address's entry with recent failures, or NULL.
+/**
+ * The address's entry with recent failures, or NULL.
+ */
 static Login_Guard_Entry *find(Login_Guard *g, IP_Address const *ip, int64_t now) {
     for (size_t i = 0; i < LOGIN_GUARD_SLOTS; i++) {
         Login_Guard_Entry *e = &g->entries[i];
@@ -81,7 +83,9 @@ static Login_Guard_Entry *find_or_add(Login_Guard *g, IP_Address const *ip, int6
     return slot;
 }
 
-// The wait the entry's failures impose, as a decision.
+/**
+ * The wait the entry's failures impose, as a decision.
+ */
 static Login_Decision decision_for(Login_Guard_Entry const *e, int64_t now) {
     int64_t const until = e->last_failure + login_guard_wait(e->failures);
     Login_Decision d = {
@@ -101,7 +105,9 @@ static Login_Decision decision_for(Login_Guard_Entry const *e, int64_t now) {
     return d;
 }
 
-// Tops up the checks of the minute: one more every CHECK_PERIOD_SEC.
+/**
+ * Tops up the checks of the minute: one more every CHECK_PERIOD_SEC.
+ */
 static void refill(Login_Guard *g, int64_t now) {
     if (now < g->tokens_at) {
         g->tokens_at = now;  // The clock went back.
@@ -123,7 +129,9 @@ static void refill(Login_Guard *g, int64_t now) {
     }
 }
 
-// Counts a refusal and says whether this one is to be logged.
+/**
+ * Counts a refusal and says whether this one is to be logged.
+ */
 static void count_refusal(uint32_t *refused, int64_t *logged_at, int64_t now, Login_Decision *d) {
     assert(refused != NULL);
     assert(logged_at != NULL);

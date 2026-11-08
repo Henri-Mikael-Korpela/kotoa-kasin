@@ -512,7 +512,9 @@ static DB_Status check_json_object(DB *db, Str json) {
     return status;
 }
 
-// Appends the single text column of a one-row query.
+/**
+ * Appends the single text column of a one-row query.
+ */
 static DB_Status append_text_result(sqlite3_stmt *stmt, Str_Builder *out) {
     assert(out != NULL);
     int rc = sqlite3_step(stmt);
@@ -538,7 +540,9 @@ static DB_Status get_json(sqlite3_stmt *stmt, int64_t id, Str_Builder *out) {
     return append_text_result(stmt, out);
 }
 
-// Runs an INSERT ... RETURNING id with the JSON body bound to ?1.
+/**
+ * Runs an INSERT ... RETURNING id with the JSON body bound to ?1.
+ */
 static DB_Status insert_from_json(DB *db, sqlite3_stmt *stmt, Str json, int64_t *id,
                                   DB_Status (*map_error)(int)) {
     DB_Status status = check_json_object(db, json);
@@ -560,7 +564,9 @@ static DB_Status insert_from_json(DB *db, sqlite3_stmt *stmt, Str json, int64_t 
     return status;
 }
 
-// Runs an UPDATE or DELETE whose row id is bound to ?1; no change means not found.
+/**
+ * Runs an UPDATE or DELETE whose row id is bound to ?1; no change means not found.
+ */
 static DB_Status change_row(DB *db, sqlite3_stmt *stmt, DB_Status (*map_error)(int)) {
     int rc = sqlite3_step(stmt);
     DB_Status status;
@@ -746,7 +752,9 @@ DB_Status db_parse_login(DB *db, Str json, Str_Builder *username, Str_Builder *p
     return status;
 }
 
-// Runs a statement that returns no rows, with its parameters already bound.
+/**
+ * Runs a statement that returns no rows, with its parameters already bound.
+ */
 static int run(sqlite3_stmt *stmt) {
     int const rc = sqlite3_step(stmt);
     finish(stmt);

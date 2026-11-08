@@ -15,7 +15,9 @@ enum {
     MAX_PAYLOAD = 256,
 };
 
-// Appends the base64url character for the low six bits of a value.
+/**
+ * Appends the base64url character for the low six bits of a value.
+ */
 static void append_sextet(Str_Builder *out, uint32_t value) {
     str_builder_append_char(out, BASE64URL.data[value & 63]);
 }
@@ -98,7 +100,9 @@ static bool sign(Str_Builder *out, Str signing_input, Str key) {
     return base64url_encode(out, mac, sizeof mac);
 }
 
-// Reads a non-negative integer claim like "exp":123 from a payload we issued.
+/**
+ * Reads a non-negative integer claim like "exp":123 from a payload we issued.
+ */
 static bool claim_int(Str payload, Str name, int64_t *value) {
     assert(value != NULL);
     size_t at = str_find(payload, name);

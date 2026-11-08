@@ -73,7 +73,9 @@ static void family_free(Family *f) {
     }
 }
 
-// Adds a range start, or nothing when it continues the previous range's country.
+/**
+ * Adds a range start, or nothing when it continues the previous range's country.
+ */
 static bool add_start(Family *f, byte const *start, byte const country[2]) {
     assert(f != NULL);
     if (f->count > 0 && memcmp(f->countries + (f->count - 1) * 2, country, 2) == 0) {
@@ -88,7 +90,9 @@ static bool add_start(Family *f, byte const *start, byte const country[2]) {
     return true;
 }
 
-// Adds one to a big-endian number; returns false when it wraps around to zero.
+/**
+ * Adds one to a big-endian number; returns false when it wraps around to zero.
+ */
 static bool increment(byte *bytes, size_t width) {
     assert(bytes != NULL);
     for (size_t i = width; i > 0; i--) {
@@ -126,7 +130,9 @@ static char const *add_range(Family *f, byte const *first, byte const *last,
     return NULL;
 }
 
-// Closes the table: a gap after the last range up to the highest address is unknown.
+/**
+ * Closes the table: a gap after the last range up to the highest address is unknown.
+ */
 static bool family_finish(Family *f) {
     return !f->seen || f->full || add_start(f, f->next, UNKNOWN);
 }
@@ -241,7 +247,9 @@ static char const *parse_csv_line(Str line, Family *v4, Family *v6) {
     return add_range(list, first, last, (byte const *)country_text.data);
 }
 
-// Reads the CSV lines into the two families.
+/**
+ * Reads the CSV lines into the two families.
+ */
 static bool read_ranges(Str csv, char const *csv_path, Family *v4, Family *v6) {
     size_t line_number = 0;
     Str rest = csv;

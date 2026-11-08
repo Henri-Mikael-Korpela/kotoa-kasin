@@ -56,12 +56,16 @@ typedef enum {
     NAME_INVALID,  /**< A .sql file with a malformed name. */
 } Name_Kind;
 
-// The file name, like "0001__create_users_table.sql".
+/**
+ * The file name, like "0001__create_users_table.sql".
+ */
 static Str file_name(Migration const *m) {
     return str_make(m->file_name_buf, m->file_name_len);
 }
 
-// The name part of the file name, like "create_users_table".
+/**
+ * The name part of the file name, like "create_users_table".
+ */
 static Str migration_name(Migration const *m) {
     return str_slice(file_name(m), VERSION_DIGITS + 2, VERSION_DIGITS + 2 + m->name_len);
 }
@@ -223,7 +227,9 @@ static bool read_sql(Str dir, Migration const *m, SQL_Text *sql) {
     return true;
 }
 
-// Runs a query that returns one integer, such as a count or a version.
+/**
+ * Runs a query that returns one integer, such as a count or a version.
+ */
 static bool query_int(sqlite3 *conn, Str sql, int *value) {
     assert(value != NULL);
     sqlite3_stmt *stmt = NULL;
@@ -257,7 +263,9 @@ static bool is_applied(sqlite3 *conn, int version, bool *applied) {
     return ok;
 }
 
-// An applied migration whose file was renamed or renumbered means history changed.
+/**
+ * An applied migration whose file was renamed or renumbered means history changed.
+ */
 static bool check_applied_name(sqlite3 *conn, Migration const *m) {
     sqlite3_stmt *stmt = NULL;
     Str const sql = STR("SELECT name FROM schema_migrations WHERE version = ?1");

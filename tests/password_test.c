@@ -29,7 +29,9 @@ static void to_hex(byte const *bytes, size_t size, char *out) {
     out[2 * size] = '\0';
 }
 
-// Published PBKDF2-HMAC-SHA256 test vectors with a 32-byte output.
+/**
+ * Published PBKDF2-HMAC-SHA256 test vectors with a 32-byte output.
+ */
 static void expect_pbkdf2(char const *password, char const *salt, uint32_t iterations,
                           char const *expected) {
     byte key[SHA256_DIGEST_SIZE];

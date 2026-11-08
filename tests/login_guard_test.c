@@ -29,7 +29,9 @@ static IP_Address address(char const *text) {
     return ip;
 }
 
-// Fails n times in a row, each when allowed, starting at *now; returns the last decision.
+/**
+ * Fails n times in a row, each when allowed, starting at *now; returns the last decision.
+ */
 static Login_Decision fail_times(IP_Address const *ip, int n, int64_t *now) {
     Login_Decision d = {
         .verdict = LOGIN_ALLOWED,
