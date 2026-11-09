@@ -209,6 +209,13 @@ async function loadRecipes(grid, categoryFilter) {
             : 'Reseptejä ei ole vielä julkaistu.');
         return;
     }
+    // Latest created first; the ids break ties between recipes created in the same second.
+    shown.sort(function (a, b) {
+        if (a.created_at !== b.created_at) {
+            return a.created_at < b.created_at ? 1 : -1;
+        }
+        return b.id - a.id;
+    });
     const cards = [];
     for (const recipe of shown) {
         cards.push(createRecipeCard(recipe));
