@@ -6,87 +6,10 @@
 
 This website was intended to run on a small Linux server with minimal resources. I wanted to see how this would work out and to also learn more about cloud services via Azure.
 
-The usual way to build a site like this is with a framework: Spring Boot (Java
+The usual way to build a site like this is with a framework like NodeJS, Spring Boot (Java
 or Kotlin), ASP.NET Core (.NET) or Go's standard library. This project uses a
 small HTTP server written in C instead, with SQLite as its only library, on
-three Azure services. This section makes the case for that choice with
-measurements, and is just as clear about what it costs.
-
-### What the site needs
-
-A handful of pages, a JSON API, one admin and image uploads, visited now and
-then with long quiet periods in between. On Azure Container Apps such a site
-scales to zero: nothing is billed while no replica runs, and the first visitor
-after a quiet period waits for a *cold start*. What matters most is therefore
-how quickly and lightly the service starts, how little it needs while it runs,
-and how little there is to keep patched. Raw speed matters least.
-
-### Measured side by side
-
-The same minimal service, one endpoint that answers `ok`, was built in each
-stack and packaged the way its own documentation suggests. This project's
-server ran as its production image, with its database, migrations and country
-data. Every service ran with this deployment's limits (0.25 vCPU, 512 MB) on a
-developer PC with Docker Desktop, in October 2026.
-
-| | This server (C) | Go 1.23 | ASP.NET Core 8 | Spring Boot 3.3 (Java 21) |
-|---|---|---|---|---|
-| Container image (uncompressed) | 26.2 MB, of which 8.4 MB is country data | 7.3 MB | 167 MB | 324 MB |
-| What the image carries | 112 KB program, musl libc, SQLite (1.4 MB) | One static program | .NET runtime (93 MB) | Java runtime (157 MB), 20 MB application |
-| Third-party libraries | 1 (SQLite) | 0 | 0 beyond the runtime | 34 |
-| Start until the first answer | 1.18 s | 0.77 s | 3.44 s | 34.6 s |
-| Same, with 1 vCPU and 2 GiB | | | 1.39 s | 10.8 s |
-| Memory when idle | 82 MiB, reserved at startup by design | 2.2 MiB | 29 MiB | 101 MiB |
-| Memory under load | 81 MiB | 8.7 MiB | 37 MiB | 119 MiB |
-| Requests per second | 13,336 | 4,533 | 1,072 | 275 |
-| Median response time under load | 0.45 ms | 1.6 ms | 32 ms | 101 ms |
-
-- **Startup** is the median of three cold starts, from `docker run` until the
-  first successful answer, so it includes about 0.75 s of Docker's own work
-  for every stack: Go's figure is almost entirely that. Measured inside the
-  container, this server is ready in 0.14–0.23 s, including opening SQLite.
-  Kotlin with Spring runs on the same Java runtime and libraries, so it
-  behaves like the Java column.
-- **Load** was generated with `wrk` (2 threads, 32 connections, 20 seconds)
-  after a 15-second warm-up, so that the Java and .NET just-in-time compilers
-  had reached full speed. At this CPU limit, the slowest responses (99th
-  percentile) take 85–100 ms for every stack except Spring Boot (600 ms),
-  because the limit hands out processor time in 100 ms slices.
-
-### What a cold start costs on Azure
-
-On the live app, on 14 October 2026, the first request after a quiet period
-took **29.8 s**; the requests after it took 0.16 s. Azure's own event log shows
-where the time went:
-
-| Step | Time |
-|---|---|
-| Azure finds a server for the app and starts pulling the image | about 8 s |
-| Pulling the 26 MB image | 3.0 s |
-| Creating the container and mounting the database's file share | 12 s |
-| This server starting, opening SQLite on the share and listening | 0.4 s |
-
-Most of the wait is Azure's and no choice of language changes that. What the
-server can do is add almost nothing to it, and this one adds under half a
-second. Going by the measurements above, a Spring Boot service at this size
-would add about 35 seconds more (about 11 at a full vCPU), and Azure would pull
-an image twelve times larger first. That is an estimate from these
-measurements, not something measured on Azure.
-
-### What it costs to run
-
-Container Apps' consumption plan gives each subscription 180,000 vCPU-seconds,
-360,000 GiB-seconds and 2 million requests free every month
-([Azure pricing](https://azure.microsoft.com/en-us/pricing/details/container-apps/)).
-At 0.25 vCPU and 0.5 GiB that covers 200 hours of running replica a month. At
-1 vCPU and 2 GiB, a common size for a JVM service, it covers 50 hours. A
-small, quickly started service that sleeps most of the time stays within the
-free allowance; the container registry, about 5 € a month, remains the only
-fixed cost. With over 13,000 requests per second in the test above, at this
-deployment's CPU limit (on a PC, not Azure's own hardware), the site will not
-need a larger size for traffic.
-
-### Fewer moving parts
+three Azure services. There are some benefits to this:
 
 - **One library.** The only code from elsewhere is SQLite and the C library;
   a minimal Spring Boot web service brings 34 libraries (Tomcat, Jackson,
@@ -100,9 +23,9 @@ need a larger size for traffic.
   library code, with 100% branch coverage of its core
   ([How SQLite Is Tested](https://www.sqlite.org/testing.html)).
 - **No database server.** The database is a file in the same process: no
-  separate server to run, pay for, patch or connect to.
+  separate server to run, pay for, patch or connect to. Since regular visitors of the site don't need to update anything and the traffic is low, this is a very good trade-off.
 
-### What it costs in other ways
+The aforementioned benefits are not without their downsides, though. Here are some trade-offs:
 
 - **Memory safety.** C does not prevent buffer overflows or use of freed
   memory. About 70% of the security bugs Microsoft assigns a CVE each year
@@ -112,47 +35,29 @@ need a larger size for traffic.
   are memory-safety problems. This server limits the risk (fixed buffers
   reserved at startup, strings that carry their length, unit tests), but Go,
   C#, Java and Kotlin rule out that whole class of bug.
-- **Everything is written by hand.** About 8,500 lines of C plus 700 lines of
+- **Everything is written "by hand".** Not really, since I used Claude Code a lot, but about 8,500 lines of C plus 700 lines of
   tests cover what a framework provides: HTTP parsing and routing, sessions
   (JWT), SHA-256 and password hashing, the JavaScript and CSS minifiers, the
-  HTML template engine, the country lookup. Hand-written code has hand-written bugs: a security review
-  found that addresses starting with `//` could read any file on the server,
-  something a framework's file serving would have prevented. It is fixed, and
-  the kernel now keeps file access inside the served directories.
-- **Go is a close rival.** In these tests Go started faster, idled on a
-  fraction of the memory (this server reserves all of its memory up front, by
-  design), shipped a smaller image and is memory-safe. A third of this
-  server's throughput is still far more than the site needs. A Go version
-  would have been a reasonable choice too.
+  HTML template engine, the country lookup. Handwritten code can be efficient and solve particular problems but better but now I am responsible for bugs many other framworks would have solved already.
 - **Native compilation narrows the gap.** Spring Boot with GraalVM native
   images and .NET with Native AOT start in a fraction of a second and use less
-  memory, at the cost of longer builds and some restrictions. They were not
-  measured here.
-- **Fixed limits.** Memory (about 80 MiB with two workers), connections and
+  memory, at the cost of longer builds and some restrictions.
+- **Fixed limits.** For now, memory (about 80 MiB with two workers), connections and
   request sizes are set when the server is built; changing them means
   rebuilding.
 - **Features and scaling.** One replica only (SQLite on a file share allows
   one writer), HTTP/1.1 only (Azure's ingress provides HTTPS and HTTP/2),
   Linux only, and no ready-made metrics, tracing or single sign-on. In Spring
   or .NET each of these is a library away; here each would be work of its own.
-- **People.** Far more developers know Spring, .NET or Go than would be
+- **People.** Far more developers know NodeJS, Spring, .NET or Go than would be
   comfortable maintaining a web server in C, so handing the project over is
-  harder.
-
-### In short
-
-For a small site with one admin, long quiet periods and a pay-per-use
-platform, the minimal setup fits well. It adds almost nothing to Azure's cold
-start, runs within the smallest size with plenty of headroom, and depends on
-one thoroughly tested library. The price is owning code that a framework would
-otherwise provide, including its security. If the site grows a team, many
-features or more than one replica, Go or ASP.NET Core would be the natural
-next step, and Spring Boot where the people around it already work on the JVM.
+  harder, even though AI tools are available.
 
 ## Services
 
-The site is deployed to **Azure Container Apps** (0.25 vCPU, 0.5 GiB, scaled to
-zero when idle, HTTPS included). Deployment process is handled by a tooling container that runs the Azure CLI. The fact that deployment tooling is inside a container also reduces the number of user configuration changes needed in the development environment. The server image is built in Azure, and the database lives on an Azure Files share, so it survives restarts and new deployments.
+The site is deployed to **Azure Container Apps** (0.25 vCPU, 0.5 GiB, one replica
+kept running from 7 A.M. to 11 P.M. Finnish time and scaled to zero when idle at
+night, HTTPS included). Deployment process is handled by a tooling container that runs the Azure CLI. The fact that deployment tooling is inside a container also reduces the number of user configuration changes needed in the development environment. The server image is built in Azure, and the database lives on an Azure Files share, so it survives restarts and new deployments.
 
 In a nutshell, the following Azure services are used:
 
@@ -249,7 +154,7 @@ All in the resource group from `deploy/config.env` (default `kotoa-kasin`):
 | Container registry (Basic) | Holds the server images; also builds them (`az acr build`) |
 | Storage account + file share `kotoa-data` | The SQLite database, mounted at `/data` |
 | Container Apps environment | Hosting platform for the app (no Log Analytics) |
-| Container app | The server, at most 1 replica |
+| Container app | The server, at most 1 replica, with the `daytime` scale rule |
 
 ## After the first deployment
 
@@ -261,10 +166,54 @@ All in the resource group from `deploy/config.env` (default `kotoa-kasin`):
   (see [Server options](server-options.md)).
 - **Sessions:** a random signing secret (`KASIN_JWT_SECRET`) is created on the
   first deployment and stored as an app secret, so logins survive restarts.
-- **Cold starts:** when idle, the app scales to zero and the first request
-  after a quiet period takes a few seconds. To keep it always on:
+- **Cold starts:** see [Cold starts and the daytime window](#cold-starts-and-the-daytime-window).
+
+## Cold starts and the daytime window
+
+When no replica is running, the first visitor waits for a *cold start*: Azure
+finds a server, pulls the image and mounts the database's file share before the
+server can answer. On the live app this took about 30 s (the server's own part
+is under half a second), and the requests after it were fast. Nothing in the
+server or the image changes that.
+
+Keeping a replica always on removes the wait but costs money around the clock.
+Since the site's visitors are in Finland, the deployment instead keeps one
+replica running during the day and lets the app scale to zero at night:
+
+| Time (Finnish time) | Replicas | First visitor waits? |
+|---|---|---|
+| 07:00 - 23:00 | 1, kept running by a cron scale rule | No |
+| 23:00 - 07:00 | 0 when idle, 1 while visitors come | Yes, about 30 s |
+
+This is a [KEDA cron scale rule](https://keda.sh/docs/latest/scalers/cron/)
+named `daytime`. `deploy` sets it up on every run, both when it creates the app
+and when it rolls out a new image, so an app made before the rule existed gets
+it on its next deploy. The maximum stays at one replica, because SQLite on a file
+share allows only one writer.
+
+The window is set in `deploy/config.env`:
+
+| Setting | Default | Notes |
+|---|---|---|
+| `AZURE_DAYTIME_TIMEZONE` | `Europe/Helsinki` | IANA time zone name. Daylight saving time is followed, so the window stays at 07:00-23:00 local time all year. |
+| `AZURE_DAYTIME_START` | `0 7 * * *` | Cron expression (minute hour day month weekday) for when the replica is started. |
+| `AZURE_DAYTIME_END` | `0 23 * * *` | Cron expression for when the replica is no longer kept running. |
+
+Things to know:
+
+- **Cost.** 16 hours a day is about 490 hours of running replica a month. The
+  free monthly allowance covers about 200 hours at 0.25 vCPU and 0.5 GiB, and
+  the rest is billed, at the lower idle rate while there are no requests. Check
+  current prices in the Azure portal.
+- **After 23:00.** The rule only stops keeping the replica up. A replica that a
+  night visitor started stays until Azure scales it down after a quiet period.
+- **At 07:00.** The replica takes a short while to start, which happens before
+  most visitors arrive.
+- **Always on, or never.** To keep a replica running all the time, run
   `az containerapp update --name kotoa-kasin --resource-group kotoa-kasin --min-replicas 1`
-  (run it inside the tooling container; this costs an always-on replica).
+  inside the tooling container. The next `deploy` sets the minimum back to 0.
+- **Check it.** `az containerapp show --name kotoa-kasin --resource-group kotoa-kasin --query properties.template.scale`
+  shows the minimum, the maximum and the `daytime` rule.
 
 ## Custom domain and `www`
 
@@ -308,8 +257,10 @@ control). It signs in to Azure first if needed. The tooling container mounts
 ## Cost
 
 The container registry (Basic) is the only fixed cost, about 5 €/month. Storage
-for a small database costs cents, and a scaled-to-zero app usually stays within
-the Container Apps free monthly allowance. Check current prices in the Azure
+for a small database costs cents. The app itself is billed for the hours of the
+daytime window beyond the free monthly allowance (see
+[Cold starts and the daytime window](#cold-starts-and-the-daytime-window)); to
+pay nothing while idle, take the rule out of `deploy/bin/deploy`. Check current prices in the Azure
 portal before deploying.
 
 ## Troubleshooting
