@@ -219,8 +219,47 @@ async function loadRecipes(grid, categoryFilter) {
     const cards = [];
     for (const recipe of shown) {
         cards.push(createRecipeCard(recipe));
+        // One ad strip after the first row, only when recipes follow it.
+        if (cards.length === AD_AFTER_CARDS && shown.length > AD_AFTER_CARDS) {
+            cards.push(createAdSlot());
+        }
     }
     grid.replaceChildren(...cards);
+    for (const ad of grid.querySelectorAll('ins.adsbygoogle')) {
+        try {
+            (window.adsbygoogle = window.adsbygoogle || []).push({});
+        } catch (error) {
+            // The ad is optional: a failing ad script must not break the recipe list.
+        }
+    }
+}
+
+/** Number of recipe cards before the ad strip: one full row of the four-column grid. */
+const AD_AFTER_CARDS = 4;
+
+/** Google AdSense publisher ID and the ad unit (data-ad-slot) shown between recipes. */
+const ADSENSE_CLIENT = 'ca-pub-2314766658130112';
+const ADSENSE_SLOT = '1565090346';
+
+/** Layout key of the in-feed ad unit, which makes the ad match the look of the recipe cards. */
+const ADSENSE_LAYOUT_KEY = '+3n+p5+p+h+ex';
+
+/**
+ * Creates the ad strip shown between recipes.
+ */
+function createAdSlot() {
+    const slot = document.createElement('aside');
+    slot.className = 'recipe-ad';
+    slot.setAttribute('aria-label', 'Mainos');
+    const ins = document.createElement('ins');
+    ins.className = 'adsbygoogle';
+    ins.style.display = 'block';
+    ins.dataset.adClient = ADSENSE_CLIENT;
+    ins.dataset.adSlot = ADSENSE_SLOT;
+    ins.dataset.adFormat = 'fluid';
+    ins.dataset.adLayoutKey = ADSENSE_LAYOUT_KEY;
+    slot.append(ins);
+    return slot;
 }
 
 // Recipe page: /reseptit/<slug>. The older /resepti?id=<id> addresses still

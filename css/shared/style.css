@@ -642,6 +642,13 @@ img {
   gap: 2.4rem 1.8rem;
 }
 
+/* The ad strip spans the whole row of the grid, whatever the column count. */
+.recipe-ad {
+  grid-column: 1 / -1;
+  min-height: 90px;
+  text-align: center;
+}
+
 .recipe-card {
   display: flex;
   flex-direction: column;
