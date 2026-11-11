@@ -232,14 +232,20 @@ static bool regex_allowed(Token const *prev) {
         case TOKEN_TEMPLATE_HEAD:
         case TOKEN_TEMPLATE_MIDDLE:
             return true;
+        case TOKEN_NUMBER:
+        case TOKEN_REGEX:
+        case TOKEN_STRING:
+        case TOKEN_TEMPLATE:
+        case TOKEN_TEMPLATE_TAIL:
+            return false;
         case TOKEN_PUNCT:
             return !(token_is(prev, STR(")")) || token_is(prev, STR("]")) ||
                      token_is(prev, STR("++")) || token_is(prev, STR("--")));
         case TOKEN_WORD:
             return is_one_of(prev->text, REGEX_KEYWORDS, COUNT_OF(REGEX_KEYWORDS));
-        default:
-            return false;
     }
+    assert(false);  // Every token kind is handled above
+    return false;
 }
 
 static bool push_brace(Lexer *lx, Brace_Kind kind, size_t offset) {
@@ -563,9 +569,13 @@ static bool can_end_statement(Token const *t) {
         case TOKEN_PUNCT:
             return token_is(t, STR(")")) || token_is(t, STR("]")) || token_is(t, STR("}")) ||
                    token_is(t, STR("++")) || token_is(t, STR("--"));
-        default:
+        case TOKEN_END:
+        case TOKEN_TEMPLATE_HEAD:
+        case TOKEN_TEMPLATE_MIDDLE:
             return false;
     }
+    assert(false);  // Every token kind is handled above
+    return false;
 }
 
 /**
@@ -585,9 +595,13 @@ static bool can_start_statement(Token const *t) {
                    token_is(t, STR("+")) || token_is(t, STR("-")) || token_is(t, STR("++")) ||
                    token_is(t, STR("--")) || token_is(t, STR("!")) || token_is(t, STR("~")) ||
                    token_is(t, STR("...")) || token_is(t, STR("<"));
-        default:
+        case TOKEN_END:
+        case TOKEN_TEMPLATE_MIDDLE:
+        case TOKEN_TEMPLATE_TAIL:
             return false;
     }
+    assert(false);  // Every token kind is handled above
+    return false;
 }
 
 /**

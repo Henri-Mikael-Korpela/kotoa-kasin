@@ -583,8 +583,11 @@ static void respond_db_error(Conn *c, DB_Status status) {
     case DB_TOO_LARGE:
         respond_json_error(c, 500, STR("response too large"), NO_STORE);
         break;
-    default:
+    case DB_ERROR:
         respond_json_error(c, 500, STR("database error"), NO_STORE);
+        break;
+    case DB_OK:
+        assert(false);  // Callers report only failures
         break;
     }
 }
